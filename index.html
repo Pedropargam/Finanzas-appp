@@ -321,8 +321,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
 const MESES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
-const MES_ACTUAL='Abril 2026';
-const HOY=new Date(2026,3,9);
+const HOY=new Date();
+const MES_ACTUAL=`${MESES[HOY.getMonth()]} ${HOY.getFullYear()}`;
 
 const DATA_DEFAULT={
   sueldoBase:2238797,
@@ -388,7 +388,23 @@ let filtro='todos',charts={},editCtx=null,editIngreso=null,editRecIdx=null;
 // Storage
 function saveState(){try{localStorage.setItem('finanzas',JSON.stringify(state));}catch(e){}}
 function loadState(){try{const s=localStorage.getItem('finanzas');if(s)state=JSON.parse(s);}catch(e){}autoPopular();render();}
-function autoPopular(){if(!state.meses[MES_ACTUAL]){state.meses[MES_ACTUAL]={cerrado:false,ingresos:[],gastos:(state.recurrentes||[]).map(r=>({...r,esRecurrente:true}))};saveState();}}
+function autoPopular(){
+  // Crear mes actual si no existe
+  if(!state.meses[MES_ACTUAL]){
+    state.meses[MES_ACTUAL]={cerrado:false,ingresos:[],gastos:(state.recurrentes||[]).map(r=>({...r,esRecurrente:true}))};
+    saveState();
+  }
+  // Si el mes actual ya estaba cerrado (raro pero posible), no hacer nada
+  // Verificar que los meses estén ordenados cronológicamente
+  const ordenados={};
+  Object.keys(state.meses)
+    .sort((a,b)=>{
+      const[mA,yA]=a.split(' '),[mB,yB]=b.split(' ');
+      return (parseInt(yA)*12+MESES.indexOf(mA))-(parseInt(yB)*12+MESES.indexOf(mB));
+    })
+    .forEach(k=>ordenados[k]=state.meses[k]);
+  state.meses=ordenados;
+}
 
 function nextMeses(desde,n){const[nom,yr]=desde.split(' ');let i=MESES.indexOf(nom),y=parseInt(yr),r=[];for(let k=1;k<n;k++){i++;if(i>11){i=0;y++;}r.push(`${MESES[i]} ${y}`);}return r;}
 function diasEnMes(mk){const[nom,yr]=mk.split(' ');return new Date(parseInt(yr),MESES.indexOf(nom)+1,0).getDate();}
@@ -569,6 +585,19 @@ function saveCierre(){
   if(bo>0)ing.push({desc:'Bono',monto:bo,esBono:true});
   if(!state.meses[mes])state.meses[mes]={cerrado:false,ingresos:[],gastos:[]};
   state.meses[mes].ingresos=ing;state.meses[mes].cerrado=true;
+
+  // Si cerramos el mes actual, crear el siguiente automáticamente
+  if(mes===MES_ACTUAL){
+    const[nom,yr]=mes.split(' ');
+    let idx=MESES.indexOf(nom),y=parseInt(yr);
+    idx++;if(idx>11){idx=0;y++;}
+    const nextMes=`${MESES[idx]} ${y}`;
+    if(!state.meses[nextMes]){
+      state.meses[nextMes]={cerrado:false,ingresos:[],gastos:(state.recurrentes||[]).map(r=>({...r,esRecurrente:true}))};
+      alert(`✓ ${mes} cerrado.\n\n${nextMes} creado automáticamente con tus gastos recurrentes.`);
+    }
+  }
+
   saveState();closeModal('modal-cerrar');if(editIngreso)showDetalle(editIngreso);else render();
 }
 
