@@ -271,8 +271,9 @@
 <div id="tab-config" class="screen">
   <div class="section-title">Cuenta</div>
   <div class="config-row"><span style="font-size:13px;color:var(--text3)" id="config-email">—</span><button onclick="logout()" style="font-size:13px;padding:6px 14px;border:1px solid rgba(163,45,45,0.3);border-radius:var(--radius);background:none;cursor:pointer;font-family:inherit;color:var(--red)">Cerrar sesión</button></div>
-  <div class="section-title" style="margin-top:1.5rem">Sueldo base</div>
-  <div class="config-row"><span style="font-size:15px;color:var(--text)">Monto mensual sin bonos</span><span class="config-val" onclick="openEditSueldo()" id="config-sueldo">—</span></div>
+  <div class="section-title" style="margin-top:1.5rem">Sueldo base <span class="add-link" onclick="openAddSueldo()">+ Agregar cambio</span></div>
+  <div class="info-box" style="margin-bottom:.75rem">Registra cada vez que cambia tu sueldo. La app usará el monto correcto para cada mes.</div>
+  <div id="config-sueldo-list"></div>
   <div class="section-title" style="margin-top:1.5rem">Categorías <span class="add-link" onclick="openAddCat()">+ Agregar</span></div>
   <div id="cats-pills" style="margin-bottom:.5rem"></div>
   <div class="section-title" style="margin-top:1.5rem">Gastos recurrentes <span class="add-link" onclick="openRecurrente(null)">+ Agregar</span></div>
@@ -329,9 +330,12 @@
 <div class="modal-bg" id="modal-sueldo">
   <div class="modal">
     <div class="modal-handle"></div>
-    <h2>Sueldo base</h2>
-    <div class="field"><label>Monto mensual sin bonos (CLP)</label><input type="number" id="inp-sb" inputmode="numeric" placeholder="0"></div>
+    <h2 id="ms-title">Nuevo sueldo base</h2>
+    <p class="hint">Ingresa desde qué mes aplica y el nuevo monto.</p>
+    <div class="field"><label>Desde el mes</label><select id="inp-sd-mes"></select></div>
+    <div class="field"><label>Monto mensual sin bonos (CLP)</label><input type="number" id="inp-sd-monto" inputmode="numeric" placeholder="0"></div>
     <div class="modal-btns">
+      <button class="mbtn-delete" id="btn-del-sd" style="display:none" onclick="deleteSueldo()">Eliminar</button>
       <button class="mbtn-cancel" onclick="closeModal('modal-sueldo')">Cancelar</button>
       <button class="mbtn-confirm" onclick="saveSueldo()">Guardar</button>
     </div>
@@ -383,7 +387,7 @@ const HOY=new Date();
 const MES_ACTUAL=`${MESES[HOY.getMonth()]} ${HOY.getFullYear()}`;
 
 const DATA_DEFAULT={
-  sueldoBase:2238797,
+  historialSueldos:[{desde:'Enero 2026', monto:2238797}],
   categorias:['Arriendo','Gastos Comunes','Pasajes Avión','Bencina','TAG','Comida','Seguro Auto','Seguro Salud','Otros'],
   recurrentes:[
     {nota:'Arriendo depto',cat:'Arriendo',monto:505591,tipo:'fijo'},
@@ -493,6 +497,13 @@ function saveState(){
 
 // ── Init ─────────────────────────────────────────────────────────
 function autoPopular(){
+  // Migrar sueldoBase antiguo a historialSueldos
+  if(state.sueldoBase && !state.historialSueldos){
+    state.historialSueldos=[{desde:'Enero 2026', monto:state.sueldoBase}];
+    delete state.sueldoBase;
+  }
+  if(!state.historialSueldos) state.historialSueldos=[{desde:'Enero 2026', monto:2238797}];
+  // Crear mes actual si no existe
   if(!state.meses[MES_ACTUAL]){
     state.meses[MES_ACTUAL]={cerrado:false,ingresos:[],gastos:(state.recurrentes||[]).map(r=>({...r,esRecurrente:true}))};
     saveState();
@@ -529,6 +540,16 @@ supa.auth.onAuthStateChange(async(event,session)=>{
 // ── Helpers ───────────────────────────────────────────────────────
 function nextMeses(desde,n){const[nom,yr]=desde.split(' ');let i=MESES.indexOf(nom),y=parseInt(yr),r=[];for(let k=1;k<n;k++){i++;if(i>11){i=0;y++;}r.push(`${MESES[i]} ${y}`);}return r;}
 function diasEnMes(mk){const[nom,yr]=mk.split(' ');return new Date(parseInt(yr),MESES.indexOf(nom)+1,0).getDate();}
+// Retorna el sueldo base vigente para un mes dado
+function getSueldo(mes){
+  const hist=(state.historialSueldos||[]).slice().sort((a,b)=>mesIdx(a.desde)-mesIdx(b.desde));
+  const mIdx=mesIdx(mes);
+  let sueldo=hist[0]?.monto||0;
+  for(const h of hist){ if(mesIdx(h.desde)<=mIdx) sueldo=h.monto; }
+  return sueldo;
+}
+function mesIdx(mk){const[n,y]=mk.split(' ');return parseInt(y)*12+MESES.indexOf(n);}
+
 const fmt=n=>'$'+Math.round(n).toLocaleString('es-CL');
 const fmtEje=v=>{const a=Math.abs(v),s=v<0?'-':'';return a>=1e6?s+'$'+(a/1e6).toFixed(1)+'M':a>=1e3?s+'$'+(a/1e3).toFixed(0)+'K':s+'$'+a;};
 const tG=m=>(state.meses[m]?.gastos||[]).reduce((a,g)=>a+g.monto,0);
@@ -549,7 +570,7 @@ function gastoHTML(g,mes,idx){
 }
 
 function renderVel(){
-  const gastado=tG(MES_ACTUAL),base=state.sueldoBase,td=diasEnMes(MES_ACTUAL),d=HOY.getDate();
+  const gastado=tG(MES_ACTUAL),base=getSueldo(MES_ACTUAL),td=diasEnMes(MES_ACTUAL),d=HOY.getDate();
   const pm=Math.round(d/td*100),pg=Math.round(gastado/base*100),diff=pg-pm;
   let sc,msg;
   if(diff<=0){sc='vel-ok';msg=`Vas bien — ${pg}% gastado con ${pm}% del mes transcurrido.`;}
@@ -563,7 +584,7 @@ function renderVel(){
 }
 
 function renderMes(){
-  const g=tG(MES_ACTUAL),b=state.sueldoBase,s=b-g;
+  const g=tG(MES_ACTUAL),b=getSueldo(MES_ACTUAL),s=b-g;
   document.getElementById('card-base').textContent=fmt(b);
   document.getElementById('card-gastado').textContent=fmt(g);
   const sEl=document.getElementById('card-saldo');
@@ -578,8 +599,9 @@ function renderMes(){
 function renderHistorial(){
   const list=document.getElementById('historial-list');if(!list)return;
   list.innerHTML='';
-  Object.keys(state.meses).reverse().forEach(m=>{
-    const mes=state.meses[m],g=tG(m),ing=mes.cerrado?tI(m):state.sueldoBase,ah=ing-g;
+  // Solo meses hasta el mes actual
+  Object.keys(state.meses).filter(m=>mesIdx(m)<=mesIdx(MES_ACTUAL)).reverse().forEach(m=>{
+    const mes=state.meses[m],g=tG(m),ing=mes.cerrado?tI(m):getSueldo(m),ah=ing-g;
     const d=document.createElement('div');d.className='month-row';d.onclick=()=>showDetalle(m);
     d.innerHTML=`<div><div class="mes-name">${m}<span class="badge ${mes.cerrado?'closed':'open'}">${mes.cerrado?'Cerrado':'Abierto'}</span></div><div class="mes-sub">Gastado: ${fmt(g)} · ${mes.cerrado?'Ingreso: '+fmt(ing):'Proyectado'}</div></div><div style="font-size:15px;font-weight:600;color:${ah>=0?'var(--green-dark)':'var(--red)'}">${fmt(ah)}</div>`;
     list.appendChild(d);
@@ -587,7 +609,7 @@ function renderHistorial(){
 }
 
 function showDetalle(m){
-  const mes=state.meses[m],g=tG(m),ing=mes.cerrado?tI(m):state.sueldoBase,ah=ing-g;
+  const mes=state.meses[m],g=tG(m),ing=mes.cerrado?tI(m):getSueldo(m),ah=ing-g;
   const bonoRow=mes.cerrado&&tBono(m)>0?`<div class="preview-row preview-bono"><span>Bono incluido</span><span>${fmt(tBono(m))}</span></div>`:'';
   const gHTML=[...mes.gastos].map((_,i)=>i).reverse().map(i=>gastoHTML(mes.gastos[i],m,i)).join('');
   document.getElementById('tab-historial').innerHTML=`
@@ -606,7 +628,10 @@ function showDetalle(m){
 
 function renderAnual(){
   let tG2=0,tb=0,tbo=0,tga=0;
-  Object.keys(state.meses).forEach(m=>{const mes=state.meses[m];if(mes.cerrado){tG2+=tI(m);tb+=tBase(m);tbo+=tBono(m);}tga+=tG(m);});
+  // Solo meses hasta el mes actual (excluir futuros)
+  Object.keys(state.meses)
+    .filter(m=>mesIdx(m)<=mesIdx(MES_ACTUAL))
+    .forEach(m=>{const mes=state.meses[m];if(mes.cerrado){tG2+=tI(m);tb+=tBase(m);tbo+=tBono(m);}tga+=tG(m);});
   document.getElementById('total-ganado').textContent=fmt(tG2);
   document.getElementById('a-base').textContent=fmt(tb);
   document.getElementById('a-bonos').textContent=fmt(tbo);
@@ -615,15 +640,17 @@ function renderAnual(){
 }
 
 function renderConfig(){
-  document.getElementById('config-sueldo').textContent=fmt(state.sueldoBase);
+  document.getElementById('config-sueldo').textContent=fmt(getSueldo(MES_ACTUAL));
   if(currentUser)document.getElementById('config-email').textContent=currentUser.email;
+  renderHistorialSueldos();
   document.getElementById('cats-pills').innerHTML=state.categorias.map((c,i)=>`<span class="cat-pill">${c}<span class="del" onclick="delCat(${i})">✕</span></span>`).join('');
   const rec=state.recurrentes||[];
   document.getElementById('rec-list').innerHTML=rec.length?rec.map((r,i)=>`<div class="item-row"><div class="item-info"><div class="nota">${r.nota}</div><div class="cat">${r.cat} · ${r.tipo} · ${fmt(r.monto)}</div></div><button class="icon-btn" onclick="openRecurrente(${i})">✎</button><button class="icon-btn del" onclick="delRecDir(${i})">✕</button></div>`).join(''):'<p style="font-size:14px;color:var(--text3);padding:8px 0">Sin gastos recurrentes aún.</p>';
 }
 
 function renderGraficos(){
-  const mks=Object.keys(state.meses);
+  // Solo meses hasta el mes actual
+  const mks=Object.keys(state.meses).filter(m=>mesIdx(m)<=mesIdx(MES_ACTUAL));
   const mf=filtro==='todos'?mks:mks.filter(m=>m===filtro);
   const fb=document.getElementById('filter-bar');fb.innerHTML='';
   ['todos',...mks].forEach(op=>{
@@ -695,16 +722,16 @@ function openEditIngreso(m){editIngreso=m;document.getElementById('mc-title').te
 function updateDepPreview(){
   const t=parseFloat(document.getElementById('inp-dep').value)||0,box=document.getElementById('dep-preview');
   if(!t){box.style.display='none';return;}box.style.display='block';
-  const bo=Math.max(0,t-state.sueldoBase);
-  document.getElementById('prev-base').textContent=fmt(Math.min(t,state.sueldoBase));
+  const _mes=editIngreso||MES_ACTUAL,_sb=getSueldo(_mes),bo=Math.max(0,t-_sb);
+  document.getElementById('prev-base').textContent=fmt(Math.min(t,_sb));
   document.getElementById('prev-total').textContent=fmt(t);
   const br=document.getElementById('prev-bono-row');
   if(bo>0){br.style.display='flex';document.getElementById('prev-bono').textContent=fmt(bo);}else br.style.display='none';
 }
 function saveCierre(){
   const t=parseFloat(document.getElementById('inp-dep').value)||0;if(!t){alert('Ingresa el total depositado');return;}
-  const mes=editIngreso||MES_ACTUAL,bo=Math.max(0,t-state.sueldoBase);
-  const ing=[{desc:'Sueldo base',monto:Math.min(t,state.sueldoBase),esBono:false}];
+  const mes=editIngreso||MES_ACTUAL,_sb=getSueldo(mes),bo=Math.max(0,t-_sb);
+  const ing=[{desc:'Sueldo base',monto:Math.min(t,_sb),esBono:false}];
   if(bo>0)ing.push({desc:'Bono',monto:bo,esBono:true});
   if(!state.meses[mes])state.meses[mes]={cerrado:false,ingresos:[],gastos:[]};
   state.meses[mes].ingresos=ing;state.meses[mes].cerrado=true;
@@ -717,8 +744,82 @@ function saveCierre(){
   saveState();closeModal('modal-cerrar');if(editIngreso)showDetalle(editIngreso);else render();
 }
 
-function openEditSueldo(){document.getElementById('inp-sb').value=state.sueldoBase;openModal('modal-sueldo');}
-function saveSueldo(){const v=parseFloat(document.getElementById('inp-sb').value)||0;if(!v){alert('Ingresa un monto válido');return;}state.sueldoBase=v;saveState();render();closeModal('modal-sueldo');}
+let editSueldoIdx=null;
+function renderHistorialSueldos(){
+  const hist=(state.historialSueldos||[]).slice().sort((a,b)=>mesIdx(b.desde)-mesIdx(a.desde));
+  const el=document.getElementById('config-sueldo-list');
+  if(!el)return;
+  el.innerHTML=hist.map((h,i)=>{
+    const esActual=mesIdx(h.desde)<=mesIdx(MES_ACTUAL)&&(i===0||hist.slice(0,i).every(x=>mesIdx(x.desde)>mesIdx(MES_ACTUAL)));
+    const realIdx=state.historialSueldos.indexOf(h);
+    return `<div class="item-row">
+      <div class="item-info">
+        <div class="nota">Desde ${h.desde}${i===0?'<span class="badge open" style="margin-left:6px">vigente</span>':''}</div>
+        <div class="cat">${fmt(h.monto)} mensual</div>
+      </div>
+      <button class="icon-btn" onclick="openEditSueldo(${realIdx})">✎</button>
+      ${state.historialSueldos.length>1?`<button class="icon-btn del" onclick="confirmDelSueldo(${realIdx})">✕</button>`:''}
+    </div>`;
+  }).join('');
+}
+
+function openAddSueldo(){
+  editSueldoIdx=null;
+  document.getElementById('ms-title').textContent='Nuevo sueldo base';
+  document.getElementById('btn-del-sd').style.display='none';
+  // Opciones de meses: desde este mes en adelante + últimos 12
+  const opts=[];
+  for(let i=-12;i<=24;i++){
+    const d=new Date(HOY.getFullYear(),HOY.getMonth()+i,1);
+    opts.push(`${MESES[d.getMonth()]} ${d.getFullYear()}`);
+  }
+  document.getElementById('inp-sd-mes').innerHTML=opts.map(o=>`<option${o===MES_ACTUAL?' selected':''}>${o}</option>`).join('');
+  document.getElementById('inp-sd-monto').value='';
+  openModal('modal-sueldo');
+}
+
+function openEditSueldo(idx){
+  editSueldoIdx=idx;
+  const h=state.historialSueldos[idx];
+  document.getElementById('ms-title').textContent='Editar sueldo base';
+  document.getElementById('btn-del-sd').style.display=state.historialSueldos.length>1?'block':'none';
+  const opts=[];
+  for(let i=-12;i<=24;i++){
+    const d=new Date(HOY.getFullYear(),HOY.getMonth()+i,1);
+    opts.push(`${MESES[d.getMonth()]} ${d.getFullYear()}`);
+  }
+  document.getElementById('inp-sd-mes').innerHTML=opts.map(o=>`<option${o===h.desde?' selected':''}>${o}</option>`).join('');
+  document.getElementById('inp-sd-monto').value=h.monto;
+  openModal('modal-sueldo');
+}
+
+function saveSueldo(){
+  const desde=document.getElementById('inp-sd-mes').value;
+  const monto=parseFloat(document.getElementById('inp-sd-monto').value)||0;
+  if(!monto){alert('Ingresa un monto válido');return;}
+  if(!state.historialSueldos)state.historialSueldos=[];
+  if(editSueldoIdx!==null&&editSueldoIdx!==undefined){
+    state.historialSueldos[editSueldoIdx]={desde,monto};
+  } else {
+    // Si ya existe una entrada para ese mes, reemplazar
+    const existing=state.historialSueldos.findIndex(h=>h.desde===desde);
+    if(existing>=0) state.historialSueldos[existing]={desde,monto};
+    else state.historialSueldos.push({desde,monto});
+  }
+  saveState();renderConfig();closeModal('modal-sueldo');
+}
+
+function deleteSueldo(){
+  if(!confirm('¿Eliminar este registro de sueldo?'))return;
+  state.historialSueldos.splice(editSueldoIdx,1);
+  saveState();renderConfig();closeModal('modal-sueldo');
+}
+
+function confirmDelSueldo(idx){
+  if(!confirm('¿Eliminar este registro de sueldo?'))return;
+  state.historialSueldos.splice(idx,1);
+  saveState();renderConfig();
+}
 function openAddCat(){document.getElementById('inp-cat-n').value='';openModal('modal-cat');}
 function saveCat(){const n=document.getElementById('inp-cat-n').value.trim();if(!n){alert('Escribe un nombre');return;}if(state.categorias.includes(n)){alert('Ya existe');return;}state.categorias.push(n);saveState();renderConfig();closeModal('modal-cat');}
 function delCat(i){if(!confirm(`¿Eliminar "${state.categorias[i]}"?`))return;state.categorias.splice(i,1);saveState();renderConfig();}
@@ -743,312 +844,5 @@ if('serviceWorker' in navigator){
   window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js'));
 }
 </script>
-const MESES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
-const HOY=new Date();
-const MES_ACTUAL=`${MESES[HOY.getMonth()]} ${HOY.getFullYear()}`;
-
-const DATA_DEFAULT={
-  sueldoBase:2238797,
-  categorias:['Arriendo','Gastos Comunes','Pasajes Avión','Bencina','TAG','Comida','Seguro Auto','Seguro Salud','Otros'],
-  recurrentes:[
-    {nota:'Arriendo depto',cat:'Arriendo',monto:505591,tipo:'fijo'},
-    {nota:'Gastos comunes',cat:'Gastos Comunes',monto:170000,tipo:'fijo'},
-    {nota:'Seguro Clínica Alemana',cat:'Seguro Salud',monto:32670,tipo:'fijo'}
-  ],
-  meses:{
-    'Enero 2026':{cerrado:true,ingresos:[{desc:'Sueldo',monto:2864627,esBono:false}],gastos:[
-      {nota:'Airbnb pto varas',cat:'Otros',monto:56063,tipo:'variable'},{nota:'Bateria externa',cat:'Otros',monto:33990,tipo:'variable'},
-      {nota:'Arriendo',cat:'Arriendo',monto:370000,tipo:'fijo'},{nota:'Comida',cat:'Comida',monto:41193,tipo:'variable'},
-      {nota:'Bencina',cat:'Bencina',monto:54508,tipo:'variable'},{nota:'Uber',cat:'Otros',monto:11000,tipo:'variable'},
-      {nota:'Giro cajero',cat:'Otros',monto:60000,tipo:'variable'},{nota:'Farmacia',cat:'Otros',monto:8000,tipo:'variable'},
-      {nota:'Sushi',cat:'Comida',monto:20000,tipo:'variable'},{nota:'Uber',cat:'Otros',monto:2000,tipo:'variable'},
-      {nota:'Cafeteria pto varas',cat:'Comida',monto:30000,tipo:'variable'},{nota:'Uber',cat:'Otros',monto:16000,tipo:'variable'},
-      {nota:'Pasaje Calama',cat:'Pasajes Avión',monto:8000,tipo:'variable'},{nota:'Autopista Vespucio',cat:'TAG',monto:1500,tipo:'variable'},
-      {nota:'Gym',cat:'Otros',monto:44000,tipo:'variable'},{nota:'TAG',cat:'TAG',monto:31600,tipo:'fijo'},
-      {nota:'Gastos comunes',cat:'Gastos Comunes',monto:177000,tipo:'fijo'},{nota:'Bus Sierra-Antofa',cat:'Otros',monto:12900,tipo:'variable'},
-      {nota:'Pasajes Marzo-Julio',cat:'Pasajes Avión',monto:551175,tipo:'variable'},{nota:'Birra bar',cat:'Otros',monto:38400,tipo:'variable'},
-      {nota:'Farmacia',cat:'Otros',monto:10000,tipo:'variable'},{nota:'Viaje Calama',cat:'Otros',monto:8000,tipo:'variable'},
-      {nota:'Krossbar',cat:'Otros',monto:66000,tipo:'variable'},{nota:'Bat externa',cat:'Otros',monto:38000,tipo:'variable'}
-    ]},
-    'Febrero 2026':{cerrado:true,ingresos:[{desc:'Sueldo',monto:2689952,esBono:false}],gastos:[
-      {nota:'Seguro viaje',cat:'Seguro Salud',monto:48000,tipo:'variable'},{nota:'Cuenta Entel',cat:'Otros',monto:24000,tipo:'fijo'},
-      {nota:'Regalo Paulis',cat:'Otros',monto:50000,tipo:'variable'},{nota:'Pago arriendo',cat:'Arriendo',monto:503772,tipo:'fijo'},
-      {nota:'Giro cajero',cat:'Otros',monto:300000,tipo:'variable'},{nota:'Vacaciones',cat:'Otros',monto:2468491,tipo:'variable'},
-      {nota:'Gastos varios',cat:'Otros',monto:214946,tipo:'variable'},{nota:'Gastos comunes',cat:'Gastos Comunes',monto:171502,tipo:'fijo'}
-    ]},
-    'Marzo 2026':{cerrado:true,ingresos:[{desc:'Sueldo base',monto:2238797,esBono:false},{desc:'Bono',monto:3451637,esBono:true}],gastos:[
-      {nota:'Arriendo',cat:'Arriendo',monto:505087,tipo:'fijo'},{nota:'TAG',cat:'TAG',monto:66000,tipo:'variable'},
-      {nota:'Pasaje Brasil',cat:'Pasajes Avión',monto:300000,tipo:'variable'},{nota:'Lentes',cat:'Otros',monto:148000,tipo:'variable'},
-      {nota:'Regalo Gabo',cat:'Otros',monto:8000,tipo:'variable'},{nota:'Alemán Experto',cat:'Otros',monto:17000,tipo:'variable'},
-      {nota:'Krossbar',cat:'Otros',monto:20000,tipo:'variable'},{nota:'Cuenta gas',cat:'Otros',monto:2000,tipo:'variable'},
-      {nota:'Uber',cat:'Otros',monto:6700,tipo:'variable'},{nota:'Gravity',cat:'Otros',monto:7500,tipo:'variable'},
-      {nota:'Seguro Clínica Alemana',cat:'Seguro Salud',monto:33000,tipo:'fijo'},{nota:'Sodimac',cat:'Otros',monto:3580,tipo:'variable'},
-      {nota:'Sodimac',cat:'Otros',monto:2347,tipo:'variable'},{nota:'Vulcanización',cat:'Otros',monto:15000,tipo:'variable'},
-      {nota:'Sodimac',cat:'Otros',monto:3500,tipo:'variable'},{nota:'Tottus',cat:'Comida',monto:7500,tipo:'variable'},
-      {nota:'IKEA',cat:'Otros',monto:35000,tipo:'variable'},{nota:'Pque Arauco',cat:'Otros',monto:1700,tipo:'variable'},
-      {nota:'Unimarc',cat:'Comida',monto:11500,tipo:'variable'},{nota:'Gravity',cat:'Otros',monto:9000,tipo:'variable'},
-      {nota:'Krossbar',cat:'Otros',monto:53000,tipo:'variable'},{nota:'Barbazul',cat:'Otros',monto:15100,tipo:'variable'},
-      {nota:'Enel',cat:'Otros',monto:15000,tipo:'variable'},{nota:'Gastos comunes',cat:'Gastos Comunes',monto:170000,tipo:'fijo'},
-      {nota:'Gravity',cat:'Otros',monto:7500,tipo:'variable'},{nota:'Bencina',cat:'Bencina',monto:53834,tipo:'variable'},
-      {nota:'Pasaje París',cat:'Pasajes Avión',monto:543710,tipo:'variable'},{nota:'Seguro auto',cat:'Seguro Auto',monto:39841,tipo:'fijo'},
-      {nota:'Regalo matrimonio Rengo',cat:'Otros',monto:66000,tipo:'variable'},{nota:'TAG',cat:'TAG',monto:3350,tipo:'variable'},
-      {nota:'Viaje Brasil',cat:'Otros',monto:530109,tipo:'variable'},{nota:'Pasaje ida Brasil',cat:'Pasajes Avión',monto:159906,tipo:'variable'},
-      {nota:'Pasaje BCN-STGO',cat:'Pasajes Avión',monto:918000,tipo:'variable'}
-    ]},
-    'Abril 2026':{cerrado:false,ingresos:[],gastos:[
-      {nota:'Uber',cat:'Otros',monto:7470,tipo:'variable'},{nota:'Boti',cat:'Otros',monto:18800,tipo:'variable'},
-      {nota:'Copiapó',cat:'Otros',monto:11880,tipo:'variable'},{nota:'SOAP',cat:'Seguro Auto',monto:7790,tipo:'variable'},
-      {nota:'Seguro Clínica Alemana',cat:'Seguro Salud',monto:32670,tipo:'fijo'},{nota:'Permiso circulación',cat:'Otros',monto:38838,tipo:'variable'},
-      {nota:'Gastos comunes',cat:'Gastos Comunes',monto:160714,tipo:'fijo'},{nota:'Empanadas',cat:'Comida',monto:9870,tipo:'variable'},
-      {nota:'Arriendo depto',cat:'Arriendo',monto:505591,tipo:'fijo'},{nota:'Plan banco',cat:'Otros',monto:20688,tipo:'variable'}
-    ]}
-  }
-};
-
-let state=JSON.parse(JSON.stringify(DATA_DEFAULT));
-let filtro='todos',charts={},editCtx=null,editIngreso=null,editRecIdx=null;
-
-// Storage
-function saveState(){try{localStorage.setItem('finanzas',JSON.stringify(state));}catch(e){}}
-function loadState(){try{const s=localStorage.getItem('finanzas');if(s)state=JSON.parse(s);}catch(e){}autoPopular();render();}
-function autoPopular(){
-  // Crear mes actual si no existe
-  if(!state.meses[MES_ACTUAL]){
-    state.meses[MES_ACTUAL]={cerrado:false,ingresos:[],gastos:(state.recurrentes||[]).map(r=>({...r,esRecurrente:true}))};
-    saveState();
-  }
-  // Si el mes actual ya estaba cerrado (raro pero posible), no hacer nada
-  // Verificar que los meses estén ordenados cronológicamente
-  const ordenados={};
-  Object.keys(state.meses)
-    .sort((a,b)=>{
-      const[mA,yA]=a.split(' '),[mB,yB]=b.split(' ');
-      return (parseInt(yA)*12+MESES.indexOf(mA))-(parseInt(yB)*12+MESES.indexOf(mB));
-    })
-    .forEach(k=>ordenados[k]=state.meses[k]);
-  state.meses=ordenados;
-}
-
-function nextMeses(desde,n){const[nom,yr]=desde.split(' ');let i=MESES.indexOf(nom),y=parseInt(yr),r=[];for(let k=1;k<n;k++){i++;if(i>11){i=0;y++;}r.push(`${MESES[i]} ${y}`);}return r;}
-function diasEnMes(mk){const[nom,yr]=mk.split(' ');return new Date(parseInt(yr),MESES.indexOf(nom)+1,0).getDate();}
-const fmt=n=>'$'+Math.round(n).toLocaleString('es-CL');
-const fmtEje=v=>{const a=Math.abs(v),s=v<0?'-':'';return a>=1e6?s+'$'+(a/1e6).toFixed(1)+'M':a>=1e3?s+'$'+(a/1e3).toFixed(0)+'K':s+'$'+a;};
-const tG=m=>(state.meses[m]?.gastos||[]).reduce((a,g)=>a+g.monto,0);
-const tI=m=>(state.meses[m]?.ingresos||[]).reduce((a,i)=>a+i.monto,0);
-const tBase=m=>(state.meses[m]?.ingresos||[]).filter(i=>!i.esBono).reduce((a,i)=>a+i.monto,0);
-const tBono=m=>(state.meses[m]?.ingresos||[]).filter(i=>i.esBono).reduce((a,i)=>a+i.monto,0);
-const COLORS=['#1D9E75','#D85A30','#185FA5','#BA7517','#993556','#534AB7','#639922','#5F5E5A','#D4537E'];
-
-function render(){
-  document.getElementById('subtitle').textContent=MES_ACTUAL;
-  renderMes();renderHistorial();renderAnual();renderConfig();
-}
-
-function gastoHTML(g,mes,idx){
-  const b=[g.esRecurrente?'<span class="badge rec">recurrente</span>':'',g.esCuota?`<span class="badge cuota">cuota ${g.cuotaNum}/${g.cuotaTotal}</span>`:''].join('');
-  return `<div class="item-row"><div class="item-info"><div class="nota">${g.nota}${b}</div><div class="cat">${g.cat} · ${g.tipo}</div></div><div class="item-monto">${fmt(g.monto)}</div><button class="icon-btn" onclick="openGasto('${mes}',${idx})">✎</button><button class="icon-btn del" onclick="confirmDel('${mes}',${idx})">✕</button></div>`;
-}
-
-function renderVel(){
-  const gastado=tG(MES_ACTUAL),base=state.sueldoBase,td=diasEnMes(MES_ACTUAL),d=HOY.getDate();
-  const pm=Math.round(d/td*100),pg=Math.round(gastado/base*100),diff=pg-pm;
-  let sc,msg;
-  if(diff<=0){sc='vel-ok';msg=`Vas bien — ${pg}% gastado con ${pm}% del mes transcurrido.`;}
-  else if(diff<=15){sc='vel-warn';msg=`Atención — ${pg}% gastado pero solo ${pm}% del mes ha pasado.`;}
-  else{sc='vel-bad';msg=`Alerta — ${pg}% gastado y solo ${pm}% del mes ha pasado.`;}
-  document.getElementById('vel-card').innerHTML=`
-    <div class="vel-title">Velocidad de gasto — día ${d} de ${td}</div>
-    <div class="vel-row"><div class="vel-lbl"><span>Mes transcurrido</span><span>${pm}%</span></div><div class="vel-track"><div class="vel-fill" style="width:${pm}%;background:#888780"></div></div></div>
-    <div class="vel-row"><div class="vel-lbl"><span>Sueldo base gastado</span><span>${pg}%</span></div><div class="vel-track"><div class="vel-fill" style="width:${Math.min(pg,100)}%;background:${pg>100?'#A32D2D':diff>15?'#BA7517':'#1D9E75'}"></div></div></div>
-    <div class="vel-status ${sc}">${msg}</div>`;
-}
-
-function renderMes(){
-  const g=tG(MES_ACTUAL),b=state.sueldoBase,s=b-g;
-  document.getElementById('card-base').textContent=fmt(b);
-  document.getElementById('card-gastado').textContent=fmt(g);
-  const sEl=document.getElementById('card-saldo');
-  sEl.textContent=fmt(s);sEl.className='val '+(s<0?'red':s<b*.2?'amber':'green');
-  document.getElementById('mes-label').textContent=MES_ACTUAL;
-  renderVel();
-  const list=document.getElementById('gastos-list'),gastos=state.meses[MES_ACTUAL]?.gastos||[];
-  if(!gastos.length){list.innerHTML='<p style="font-size:14px;color:var(--text3);text-align:center;padding:2rem 0">Sin gastos registrados aún</p>';return;}
-  list.innerHTML=[...gastos].map((_,i)=>i).reverse().map(i=>gastoHTML(gastos[i],MES_ACTUAL,i)).join('');
-}
-
-function renderHistorial(){
-  const list=document.getElementById('historial-list');if(!list)return;
-  list.innerHTML='';
-  Object.keys(state.meses).reverse().forEach(m=>{
-    const mes=state.meses[m],g=tG(m),ing=mes.cerrado?tI(m):state.sueldoBase,ah=ing-g;
-    const d=document.createElement('div');d.className='month-row';d.onclick=()=>showDetalle(m);
-    d.innerHTML=`<div><div class="mes-name">${m}<span class="badge ${mes.cerrado?'closed':'open'}">${mes.cerrado?'Cerrado':'Abierto'}</span></div><div class="mes-sub">Gastado: ${fmt(g)} · ${mes.cerrado?'Ingreso: '+fmt(ing):'Proyectado'}</div></div><div style="font-size:15px;font-weight:600;color:${ah>=0?'var(--green-dark)':'var(--red)'}">${fmt(ah)}</div>`;
-    list.appendChild(d);
-  });
-}
-
-function showDetalle(m){
-  const mes=state.meses[m],g=tG(m),ing=mes.cerrado?tI(m):state.sueldoBase,ah=ing-g;
-  const bonoRow=mes.cerrado&&tBono(m)>0?`<div class="preview-row preview-bono"><span>Bono incluido</span><span>${fmt(tBono(m))}</span></div>`:'';
-  const gHTML=[...mes.gastos].map((_,i)=>i).reverse().map(i=>gastoHTML(mes.gastos[i],m,i)).join('');
-  document.getElementById('tab-historial').innerHTML=`
-    <button class="back-btn" onclick="renderHistorial()">← Volver</button>
-    <div style="font-size:20px;font-weight:700;margin-bottom:1rem">${m}</div>
-    <div class="cards">
-      <div class="card"><label>${mes.cerrado?'Ingreso total':'Proyectado'}</label><div class="val">${fmt(ing)}</div></div>
-      <div class="card"><label>Total gastado</label><div class="val">${fmt(g)}</div></div>
-      <div class="card full"><label>Ahorro / Déficit</label><div class="val ${ah>=0?'green':'red'}">${fmt(ah)}</div></div>
-    </div>
-    ${mes.cerrado?`<div class="section-title">Ingreso <button onclick="openEditIngreso('${m}')" style="font-size:12px;padding:3px 10px;border:1px solid var(--border);border-radius:var(--radius);background:none;cursor:pointer;font-family:inherit;color:var(--text3)">Editar</button></div>
-    <div class="preview-box"><div class="preview-row"><span>Sueldo base</span><span>${fmt(tBase(m))}</span></div>${bonoRow}<div class="preview-row preview-total"><span>Total</span><span>${fmt(ing)}</span></div></div>`:''}
-    <div class="section-title">Gastos (${mes.gastos.length})</div>${gHTML}
-    <button class="btn primary" onclick="openGasto('${m}',null)" style="margin-top:8px">+ Agregar gasto</button>`;
-}
-
-function renderAnual(){
-  let tG2=0,tb=0,tbo=0,tga=0;
-  Object.keys(state.meses).forEach(m=>{const mes=state.meses[m];if(mes.cerrado){tG2+=tI(m);tb+=tBase(m);tbo+=tBono(m);}tga+=tG(m);});
-  document.getElementById('total-ganado').textContent=fmt(tG2);
-  document.getElementById('a-base').textContent=fmt(tb);
-  document.getElementById('a-bonos').textContent=fmt(tbo);
-  document.getElementById('a-gastado').textContent=fmt(tga);
-  const aEl=document.getElementById('a-ahorro');aEl.textContent=fmt(tG2-tga);aEl.className='val '+(tG2-tga>=0?'green':'red');
-}
-
-function renderConfig(){
-  document.getElementById('config-sueldo').textContent=fmt(state.sueldoBase);
-  document.getElementById('cats-pills').innerHTML=state.categorias.map((c,i)=>`<span class="cat-pill">${c}<span class="del" onclick="delCat(${i})">✕</span></span>`).join('');
-  const rec=state.recurrentes||[];
-  document.getElementById('rec-list').innerHTML=rec.length?rec.map((r,i)=>`<div class="item-row"><div class="item-info"><div class="nota">${r.nota}</div><div class="cat">${r.cat} · ${r.tipo} · ${fmt(r.monto)}</div></div><button class="icon-btn" onclick="openRecurrente(${i})">✎</button><button class="icon-btn del" onclick="delRecDir(${i})">✕</button></div>`).join(''):'<p style="font-size:14px;color:var(--text3);padding:8px 0">Sin gastos recurrentes aún.</p>';
-}
-
-function renderGraficos(){
-  const mks=Object.keys(state.meses);
-  const mf=filtro==='todos'?mks:mks.filter(m=>m===filtro);
-  const fb=document.getElementById('filter-bar');fb.innerHTML='';
-  ['todos',...mks].forEach(op=>{
-    const b=document.createElement('button');b.className='filter-btn'+(filtro===op?' active':'');
-    b.textContent=op==='todos'?'Todos':op.split(' ')[0];b.onclick=()=>{filtro=op;renderGraficos();};fb.appendChild(b);
-  });
-  const cT={};mf.forEach(m=>(state.meses[m]?.gastos||[]).forEach(g=>{cT[g.cat]=(cT[g.cat]||0)+g.monto;}));
-  const cL=Object.keys(cT).sort((a,b)=>cT[b]-cT[a]),cV=cL.map(c=>cT[c]),mx=cV[0]||1;
-  document.getElementById('hbar-wrap').innerHTML=cL.map((c,i)=>`<div style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;font-size:13px;color:var(--text3);margin-bottom:5px"><span>${c}</span><span style="font-weight:600;color:var(--text)">${fmt(cV[i])}</span></div><div style="height:10px;background:var(--bg2);border-radius:5px;overflow:hidden"><div style="height:100%;width:${Math.round(cV[i]/mx*100)}%;background:${COLORS[i%COLORS.length]};border-radius:5px"></div></div></div>`).join('');
-  const lM=mf.map(m=>m.split(' ')[0]),iM=mf.map(m=>state.meses[m].cerrado?tI(m):0),gM=mf.map(m=>tG(m));
-  if(charts.m)charts.m.destroy();
-  charts.m=new Chart(document.getElementById('chart-mensual'),{type:'bar',data:{labels:lM,datasets:[{label:'Ingreso',data:iM,backgroundColor:'#1D9E75',borderRadius:4},{label:'Gasto',data:gM,backgroundColor:'#D85A30',borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${fmt(ctx.raw)}`}}},scales:{x:{ticks:{autoSkip:false,color:'#888780'},grid:{display:false}},y:{ticks:{callback:fmtEje,color:'#888780'},grid:{color:'rgba(0,0,0,0.05)'}}}}});
-  let ac=0;
-  const ahD=mks.map(m=>{if(state.meses[m].cerrado)ac+=tI(m)-tG(m);return{mes:m.split(' ')[0],val:ac,enF:mf.includes(m)};});
-  const ahL=filtro==='todos'?ahD.map(a=>a.mes):ahD.filter(a=>a.enF).map(a=>a.mes);
-  const ahV=filtro==='todos'?ahD.map(a=>a.val):ahD.filter(a=>a.enF).map(a=>a.val);
-  if(charts.a)charts.a.destroy();
-  charts.a=new Chart(document.getElementById('chart-ahorro'),{type:'line',data:{labels:ahL,datasets:[{label:'Ahorro',data:ahV,borderColor:'#185FA5',backgroundColor:'rgba(24,95,165,0.08)',fill:true,tension:0.3,pointRadius:8,pointHoverRadius:10,pointBackgroundColor:'#185FA5',pointBorderColor:'#fff',pointBorderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,onClick:(e,els)=>{if(els.length){const el=els[0],v=ahV[el.index],c=v>=0?'var(--green-dark)':'var(--red)';document.getElementById('punto-valor').innerHTML=`<span style="color:var(--text3);font-size:12px">${ahL[el.index]}</span> &nbsp; <span style="color:${c};font-size:18px;font-weight:700">${fmt(v)}</span>`;}},plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>`Ahorro: ${fmt(ctx.raw)}`},backgroundColor:'#185FA5',padding:10,cornerRadius:8}},scales:{x:{ticks:{color:'#888780'},grid:{display:false}},y:{ticks:{callback:fmtEje,color:'#888780'},grid:{color:'rgba(0,0,0,0.05)'}}}}});
-}
-
-function showTab(t){
-  document.querySelectorAll('.tab').forEach((el,i)=>el.classList.toggle('active',['mes','historial','graficos','anual','config'][i]===t));
-  document.querySelectorAll('.screen').forEach(el=>el.classList.remove('active'));
-  document.getElementById('tab-'+t).classList.add('active');
-  if(t==='historial')renderHistorial();
-  if(t==='graficos')renderGraficos();
-}
-
-function updateCuotaPreview(){
-  const m=parseFloat(document.getElementById('inp-monto').value)||0,n=parseInt(document.getElementById('inp-cuotas').value)||1,p=document.getElementById('cuota-preview');
-  if(n<=1||!m){p.style.display='none';return;}
-  const fut=nextMeses(MES_ACTUAL,n);
-  p.style.display='block';p.textContent=`${n} cuotas de ${fmt(Math.round(m/n))} → ${[MES_ACTUAL.split(' ')[0],...fut.map(x=>x.split(' ')[0])].join(', ')}`;
-}
-
-function openGasto(mes,idx){
-  editCtx={mes:mes||MES_ACTUAL,idx};
-  document.getElementById('inp-cat').innerHTML=state.categorias.map(c=>`<option>${c}</option>`).join('');
-  const ed=idx!==null&&idx!==undefined;
-  document.getElementById('mg-title').textContent=ed?'Editar gasto':'Agregar gasto';
-  document.getElementById('inp-cuotas').value='1';document.getElementById('cuota-preview').style.display='none';
-  const db=document.getElementById('btn-del-g');
-  if(ed){const g=state.meses[editCtx.mes].gastos[idx];document.getElementById('inp-nota').value=g.nota;document.getElementById('inp-cat').value=g.cat;document.getElementById('inp-monto').value=g.monto;document.getElementById('inp-tipo').value=g.tipo;db.style.display='block';}
-  else{document.getElementById('inp-nota').value='';document.getElementById('inp-monto').value='';db.style.display='none';}
-  openModal('modal-gasto');
-}
-function saveGasto(){
-  const nota=document.getElementById('inp-nota').value.trim(),cat=document.getElementById('inp-cat').value,
-    mt=parseFloat(document.getElementById('inp-monto').value)||0,tipo=document.getElementById('inp-tipo').value,
-    nc=parseInt(document.getElementById('inp-cuotas').value)||1;
-  if(!nota||!mt){alert('Completa todos los campos');return;}
-  const m=editCtx.mes;if(!state.meses[m])state.meses[m]={cerrado:false,ingresos:[],gastos:[]};
-  const cm=Math.round(mt/nc);
-  if(editCtx.idx!==null&&editCtx.idx!==undefined){state.meses[m].gastos[editCtx.idx]={...state.meses[m].gastos[editCtx.idx],nota,cat,monto:cm,tipo};}
-  else{
-    const gb={nota,cat,monto:cm,tipo};if(nc>1){gb.esCuota=true;gb.cuotaNum=1;gb.cuotaTotal=nc;}
-    state.meses[m].gastos.push(gb);
-    if(nc>1){nextMeses(m,nc).forEach((fm,fi)=>{if(!state.meses[fm])state.meses[fm]={cerrado:false,ingresos:[],gastos:(state.recurrentes||[]).map(r=>({...r,esRecurrente:true}))};state.meses[fm].gastos.push({nota,cat,monto:cm,tipo,esCuota:true,cuotaNum:fi+2,cuotaTotal:nc});});}
-  }
-  saveState();closeModal('modal-gasto');
-  const enD=document.getElementById('tab-historial').querySelector('.back-btn');
-  if(enD&&m!==MES_ACTUAL)showDetalle(m);else render();
-}
-function deleteGasto(){if(!confirm('¿Eliminar este gasto?'))return;state.meses[editCtx.mes].gastos.splice(editCtx.idx,1);saveState();closeModal('modal-gasto');const enD=document.getElementById('tab-historial').querySelector('.back-btn');if(enD&&editCtx.mes!==MES_ACTUAL)showDetalle(editCtx.mes);else render();}
-function confirmDel(mes,idx){if(!confirm('¿Eliminar?'))return;state.meses[mes].gastos.splice(idx,1);saveState();const enD=document.getElementById('tab-historial').querySelector('.back-btn');if(enD&&mes!==MES_ACTUAL)showDetalle(mes);else render();}
-
-function openCerrarMes(){editIngreso=null;document.getElementById('mc-title').textContent='Cerrar mes';document.getElementById('inp-dep').value='';document.getElementById('dep-preview').style.display='none';openModal('modal-cerrar');}
-function openEditIngreso(m){editIngreso=m;document.getElementById('mc-title').textContent='Editar ingreso';document.getElementById('inp-dep').value=tI(m);updateDepPreview();openModal('modal-cerrar');}
-function updateDepPreview(){
-  const t=parseFloat(document.getElementById('inp-dep').value)||0,box=document.getElementById('dep-preview');
-  if(!t){box.style.display='none';return;}box.style.display='block';
-  const bo=Math.max(0,t-state.sueldoBase);
-  document.getElementById('prev-base').textContent=fmt(Math.min(t,state.sueldoBase));
-  document.getElementById('prev-total').textContent=fmt(t);
-  const br=document.getElementById('prev-bono-row');
-  if(bo>0){br.style.display='flex';document.getElementById('prev-bono').textContent=fmt(bo);}else br.style.display='none';
-}
-function saveCierre(){
-  const t=parseFloat(document.getElementById('inp-dep').value)||0;if(!t){alert('Ingresa el total depositado');return;}
-  const mes=editIngreso||MES_ACTUAL,bo=Math.max(0,t-state.sueldoBase);
-  const ing=[{desc:'Sueldo base',monto:Math.min(t,state.sueldoBase),esBono:false}];
-  if(bo>0)ing.push({desc:'Bono',monto:bo,esBono:true});
-  if(!state.meses[mes])state.meses[mes]={cerrado:false,ingresos:[],gastos:[]};
-  state.meses[mes].ingresos=ing;state.meses[mes].cerrado=true;
-
-  // Si cerramos el mes actual, crear el siguiente automáticamente
-  if(mes===MES_ACTUAL){
-    const[nom,yr]=mes.split(' ');
-    let idx=MESES.indexOf(nom),y=parseInt(yr);
-    idx++;if(idx>11){idx=0;y++;}
-    const nextMes=`${MESES[idx]} ${y}`;
-    if(!state.meses[nextMes]){
-      state.meses[nextMes]={cerrado:false,ingresos:[],gastos:(state.recurrentes||[]).map(r=>({...r,esRecurrente:true}))};
-      alert(`✓ ${mes} cerrado.\n\n${nextMes} creado automáticamente con tus gastos recurrentes.`);
-    }
-  }
-
-  saveState();closeModal('modal-cerrar');if(editIngreso)showDetalle(editIngreso);else render();
-}
-
-function openEditSueldo(){document.getElementById('inp-sb').value=state.sueldoBase;openModal('modal-sueldo');}
-function saveSueldo(){const v=parseFloat(document.getElementById('inp-sb').value)||0;if(!v){alert('Ingresa un monto válido');return;}state.sueldoBase=v;saveState();render();closeModal('modal-sueldo');}
-function openAddCat(){document.getElementById('inp-cat-n').value='';openModal('modal-cat');}
-function saveCat(){const n=document.getElementById('inp-cat-n').value.trim();if(!n){alert('Escribe un nombre');return;}if(state.categorias.includes(n)){alert('Ya existe');return;}state.categorias.push(n);saveState();renderConfig();closeModal('modal-cat');}
-function delCat(i){if(!confirm(`¿Eliminar "${state.categorias[i]}"?`))return;state.categorias.splice(i,1);saveState();renderConfig();}
-function openRecurrente(idx){
-  editRecIdx=idx;document.getElementById('inp-rc').innerHTML=state.categorias.map(c=>`<option>${c}</option>`).join('');
-  const ed=idx!==null&&idx!==undefined,db=document.getElementById('btn-del-r');
-  document.getElementById('mr-title').textContent=ed?'Editar recurrente':'Nuevo recurrente';
-  if(ed){const r=state.recurrentes[idx];document.getElementById('inp-rn').value=r.nota;document.getElementById('inp-rc').value=r.cat;document.getElementById('inp-rm').value=r.monto;document.getElementById('inp-rt').value=r.tipo;db.style.display='block';}
-  else{document.getElementById('inp-rn').value='';document.getElementById('inp-rm').value='';db.style.display='none';}
-  openModal('modal-rec');
-}
-function saveRec(){const n=document.getElementById('inp-rn').value.trim(),c=document.getElementById('inp-rc').value,m=parseFloat(document.getElementById('inp-rm').value)||0,t=document.getElementById('inp-rt').value;if(!n||!m){alert('Completa todos los campos');return;}if(!state.recurrentes)state.recurrentes=[];const r={nota:n,cat:c,monto:m,tipo:t,esRecurrente:true};if(editRecIdx!==null&&editRecIdx!==undefined)state.recurrentes[editRecIdx]=r;else state.recurrentes.push(r);saveState();renderConfig();closeModal('modal-rec');}
-function deleteRec(){if(!confirm('¿Eliminar?'))return;state.recurrentes.splice(editRecIdx,1);saveState();renderConfig();closeModal('modal-rec');}
-function delRecDir(i){if(!confirm('¿Eliminar?'))return;state.recurrentes.splice(i,1);saveState();renderConfig();}
-
-function openModal(id){document.getElementById(id).classList.add('open');}
-function closeModal(id){document.getElementById(id).classList.remove('open');}
-document.querySelectorAll('.modal-bg').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('open');}));
-
-// Service Worker
-if('serviceWorker' in navigator){
-  window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js'));
-}
-
 </body>
 </html>
