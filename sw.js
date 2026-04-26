@@ -1,4 +1,4 @@
-const CACHE = 'finanzas-v3';
+const CACHE = 'finanzas-v4';
 const ASSETS = [
   './',
   './index.html',
@@ -23,7 +23,20 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
+  const url = new URL(e.request.url);
+  // No interferir con Supabase
+  if (url.hostname.includes('supabase.co') || url.hostname.includes('supabase.io')) {
+    return;
+  }
+  // Network first para HTML (siempre versión más reciente)
+  if (e.request.mode === 'navigate' || url.pathname.endsWith('index.html') || url.pathname.endsWith('/')) {
+    e.respondWith(
+      fetch(e.request).catch(() => caches.match('./index.html'))
+    );
+    return;
+  }
+  // Cache first para assets
   e.respondWith(
-    caches.match(e.request).then(cached => cached || fetch(e.request).catch(() => caches.match('./index.html')))
+    caches.match(e.request).then(cached => cached || fetch(e.request))
   );
 });
