@@ -506,17 +506,35 @@ function saveState(){
 
 // ── Init ─────────────────────────────────────────────────────────
 function autoPopular(){
+  // Garantizar estructuras
+  if(!state.meses || typeof state.meses !== 'object') state.meses = {};
+  if(!Array.isArray(state.categorias)) state.categorias = DATA_DEFAULT.categorias.slice();
+  if(!Array.isArray(state.recurrentes)) state.recurrentes = [];
+
   // Migrar sueldoBase antiguo a historialSueldos
   if(state.sueldoBase && !state.historialSueldos){
     state.historialSueldos=[{desde:'Enero 2026', monto:state.sueldoBase}];
     delete state.sueldoBase;
   }
-  if(!state.historialSueldos) state.historialSueldos=[{desde:'Enero 2026', monto:2238797}];
+  if(!Array.isArray(state.historialSueldos) || !state.historialSueldos.length){
+    state.historialSueldos=[{desde:'Enero 2026', monto:2238797}];
+  }
+
   // Crear mes actual si no existe
   if(!state.meses[MES_ACTUAL]){
     state.meses[MES_ACTUAL]={cerrado:false,ingresos:[],gastos:(state.recurrentes||[]).map(r=>({...r,esRecurrente:true}))};
     saveState();
   }
+
+  // Sanitizar cada mes
+  Object.keys(state.meses).forEach(m => {
+    const mes = state.meses[m];
+    if(!mes || typeof mes !== 'object') { state.meses[m] = {cerrado:false,ingresos:[],gastos:[]}; return; }
+    if(!Array.isArray(mes.ingresos)) mes.ingresos = [];
+    if(!Array.isArray(mes.gastos)) mes.gastos = [];
+    if(typeof mes.cerrado !== 'boolean') mes.cerrado = false;
+  });
+
   const ordenados={};
   Object.keys(state.meses)
     .sort((a,b)=>{const[mA,yA]=a.split(' '),[mB,yB]=b.split(' ');return(parseInt(yA)*12+MESES.indexOf(mA))-(parseInt(yB)*12+MESES.indexOf(mB));})
@@ -525,15 +543,32 @@ function autoPopular(){
 }
 
 async function initApp(user){
-  currentUser=user;
-  showLoading(true);
-  showLogin(false);
-  const saved=await loadFromSupabase(user.id);
-  if(saved) state=saved;
-  autoPopular();
-  document.getElementById('config-email').textContent=user.email;
-  showLoading(false);
-  render();
+  const loadingTxt = document.getElementById('loading-screen').querySelector('.loading-txt');
+  try {
+    currentUser=user;
+    showLoading(true);
+    showLogin(false);
+    loadingTxt.textContent='Cargando tus datos...';
+
+    const saved=await loadFromSupabase(user.id);
+    if(saved){
+      // Merge saved con defaults para garantizar todos los campos
+      state = {
+        historialSueldos: saved.historialSueldos || (saved.sueldoBase ? [{desde:'Enero 2026', monto:saved.sueldoBase}] : DATA_DEFAULT.historialSueldos),
+        categorias: Array.isArray(saved.categorias) ? saved.categorias : DATA_DEFAULT.categorias,
+        recurrentes: Array.isArray(saved.recurrentes) ? saved.recurrentes : DATA_DEFAULT.recurrentes,
+        meses: (saved.meses && typeof saved.meses === 'object') ? saved.meses : DATA_DEFAULT.meses
+      };
+    }
+    autoPopular();
+    document.getElementById('config-email').textContent=user.email;
+    showLoading(false);
+    render();
+  } catch(e){
+    console.error('initApp error', e);
+    loadingTxt.textContent='Error al cargar: '+e.message+'\nReintenta en unos segundos.';
+    setTimeout(()=>{showLoading(false);showLogin(true);}, 4000);
+  }
 }
 
 // Auth state listener (solo para sign out y eventos posteriores)
