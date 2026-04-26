@@ -198,11 +198,15 @@
     </svg>
   </div>
   <div class="login-title">Mis Finanzas</div>
-  <div class="login-sub">Ingresa tu email para acceder.<br>Te enviaremos un enlace mágico.</div>
+  <div class="login-sub" id="login-sub">Ingresa tu email y contraseña.</div>
   <div class="login-box">
-    <input type="email" id="login-email" placeholder="tu@email.com" inputmode="email">
-    <button class="btn primary" onclick="sendMagicLink()">Enviar enlace de acceso</button>
+    <input type="email" id="login-email" placeholder="tu@email.com" inputmode="email" autocomplete="email">
+    <input type="password" id="login-password" placeholder="Contraseña" autocomplete="current-password">
+    <button class="btn primary" onclick="doLogin()" id="btn-login">Iniciar sesión</button>
     <div class="login-msg" id="login-msg"></div>
+    <div style="text-align:center;margin-top:14px;font-size:13px;color:var(--text3)">
+      <a id="toggle-mode" onclick="toggleMode()" style="color:var(--green);cursor:pointer;text-decoration:underline">Crear una cuenta nueva</a>
+    </div>
   </div>
 </div>
 
@@ -460,17 +464,72 @@ let saveTimer=null, currentUser=null;
 function showLoading(v){document.getElementById('loading-screen').classList.toggle('active',v);}
 function showLogin(v){document.getElementById('login-screen').classList.toggle('active',v);}
 
-async function sendMagicLink(){
-  const email=document.getElementById('login-email').value.trim();
-  const msg=document.getElementById('login-msg');
-  if(!email){msg.className='login-msg error';msg.textContent='Ingresa tu email.';return;}
-  const btn=document.querySelector('#login-screen .btn');
-  btn.textContent='Enviando...';btn.disabled=true;
-  const redirectUrl = location.origin + location.pathname;
-  const {error}=await supa.auth.signInWithOtp({email, options:{emailRedirectTo: redirectUrl}});
-  btn.textContent='Enviar enlace de acceso';btn.disabled=false;
-  if(error){msg.className='login-msg error';msg.textContent='Error: '+error.message;}
-  else{msg.className='login-msg success';msg.textContent='✓ Enlace enviado a '+email+'\n\nRevisa tu bandeja de entrada y haz clic en el enlace para entrar.';}
+let isRegisterMode = false;
+function toggleMode(){
+  isRegisterMode = !isRegisterMode;
+  document.getElementById('login-sub').textContent = isRegisterMode
+    ? 'Crea una cuenta nueva.'
+    : 'Ingresa tu email y contraseña.';
+  document.getElementById('btn-login').textContent = isRegisterMode ? 'Crear cuenta' : 'Iniciar sesión';
+  document.getElementById('toggle-mode').textContent = isRegisterMode
+    ? 'Ya tengo cuenta — iniciar sesión'
+    : 'Crear una cuenta nueva';
+  document.getElementById('login-msg').textContent = '';
+}
+
+async function doLogin(){
+  const email = document.getElementById('login-email').value.trim();
+  const pass = document.getElementById('login-password').value;
+  const msg = document.getElementById('login-msg');
+  if(!email || !pass){
+    msg.className='login-msg error';
+    msg.textContent='Completa email y contraseña.';
+    return;
+  }
+  if(pass.length < 6){
+    msg.className='login-msg error';
+    msg.textContent='La contraseña debe tener al menos 6 caracteres.';
+    return;
+  }
+  const btn = document.getElementById('btn-login');
+  const original = btn.textContent;
+  btn.textContent = isRegisterMode ? 'Creando cuenta...' : 'Iniciando sesión...';
+  btn.disabled = true;
+  msg.textContent = '';
+
+  try {
+    if(isRegisterMode){
+      const {data, error} = await supa.auth.signUp({email, password: pass});
+      if(error) throw error;
+      if(data.session?.user){
+        // Sesión activa inmediatamente
+        await initApp(data.session.user);
+      } else if(data.user){
+        // Confirmación de email pendiente
+        msg.className='login-msg success';
+        msg.textContent='✓ Cuenta creada. Si pide confirmar email, revisa tu correo. Si no, inicia sesión.';
+        isRegisterMode = false;
+        document.getElementById('login-sub').textContent='Ingresa tu email y contraseña.';
+        document.getElementById('btn-login').textContent='Iniciar sesión';
+        document.getElementById('toggle-mode').textContent='Crear una cuenta nueva';
+      }
+    } else {
+      const {data, error} = await supa.auth.signInWithPassword({email, password: pass});
+      if(error) throw error;
+      if(data.session?.user){
+        await initApp(data.session.user);
+      }
+    }
+  } catch(e){
+    msg.className='login-msg error';
+    let txt = e.message || 'Error desconocido';
+    if(txt.includes('Invalid login credentials')) txt='Email o contraseña incorrectos.';
+    else if(txt.includes('already registered')) txt='Este email ya está registrado. Inicia sesión.';
+    else if(txt.includes('Email not confirmed')) txt='Confirma tu email primero (revisa tu correo).';
+    msg.textContent = txt;
+    btn.textContent = original;
+    btn.disabled = false;
+  }
 }
 
 async function logout(){
@@ -579,45 +638,9 @@ supa.auth.onAuthStateChange(async(event,session)=>{
   }
 });
 
-// Bootstrap robusto con polling y debug visible
+// Bootstrap simple: solo verificar sesión
 async function bootstrap(){
-  const loadingTxt = document.getElementById('loading-screen').querySelector('.loading-txt');
-  const debug = (msg) => { loadingTxt.textContent = msg; console.log('[AUTH]', msg); };
-
   try {
-    const hasAuthHash = location.hash && location.hash.includes('access_token');
-    const hasError = location.hash && location.hash.includes('error');
-
-    if(hasError){
-      debug('Error en el enlace: ' + decodeURIComponent(location.hash));
-      await new Promise(r=>setTimeout(r, 3000));
-      showLoading(false);
-      showLogin(true);
-      return;
-    }
-
-    if(hasAuthHash){
-      debug('Iniciando sesión desde el enlace...');
-      // Polling: esperar hasta 8 segundos para que Supabase procese el hash
-      for(let i=0; i<40; i++){
-        const {data:{session}} = await supa.auth.getSession();
-        if(session?.user){
-          debug('✓ Sesión iniciada');
-          history.replaceState(null,'',location.pathname);
-          await initApp(session.user);
-          return;
-        }
-        await new Promise(r=>setTimeout(r, 200));
-      }
-      debug('No se pudo iniciar sesión. Reintenta.');
-      await new Promise(r=>setTimeout(r, 2500));
-      showLoading(false);
-      showLogin(true);
-      return;
-    }
-
-    // Sin auth callback: revisar sesión existente
-    debug('Verificando sesión...');
     const {data:{session}} = await supa.auth.getSession();
     if(session?.user){
       await initApp(session.user);
@@ -627,8 +650,6 @@ async function bootstrap(){
     }
   } catch(e){
     console.error('Bootstrap error', e);
-    debug('Error: ' + e.message);
-    await new Promise(r=>setTimeout(r, 3000));
     showLoading(false);
     showLogin(true);
   }
@@ -937,15 +958,9 @@ function openModal(id){document.getElementById(id).classList.add('open');}
 function closeModal(id){document.getElementById(id).classList.remove('open');}
 document.querySelectorAll('.modal-bg').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('open');}));
 
-// Service Worker - skip if processing auth callback
+// Service Worker
 if('serviceWorker' in navigator){
-  const isAuthCallback = location.hash && location.hash.includes('access_token');
-  if(isAuthCallback){
-    // Desregistrar SWs viejos durante callback de auth
-    navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister()));
-  } else {
-    window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js'));
-  }
+  window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(e=>console.error('SW error',e)));
 }
 </script>
 </body>
