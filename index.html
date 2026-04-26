@@ -379,7 +379,15 @@
 // ── Supabase config ──────────────────────────────────────────────
 const SUPA_URL = 'https://hqnwxwrpzhqexjsfsshx.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhxbnd4d3JwemhxZXhqc2Zzc2h4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4NzUyNTQsImV4cCI6MjA5MjQ1MTI1NH0.Bf8ystlPPJP_GIyXko3N4-mRo-X8xx9Qk2pBm6xcrhY';
-const supa = supabase.createClient(SUPA_URL, SUPA_KEY);
+const supa = supabase.createClient(SUPA_URL, SUPA_KEY, {
+  auth: {
+    persistSession: true,
+    storage: window.localStorage,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+    flowType: 'implicit'
+  }
+});
 
 // ── Constantes ───────────────────────────────────────────────────
 const MESES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
@@ -458,7 +466,8 @@ async function sendMagicLink(){
   if(!email){msg.className='login-msg error';msg.textContent='Ingresa tu email.';return;}
   const btn=document.querySelector('#login-screen .btn');
   btn.textContent='Enviando...';btn.disabled=true;
-  const {error}=await supa.auth.signInWithOtp({email, options:{emailRedirectTo: location.href}});
+  const redirectUrl = location.origin + location.pathname;
+  const {error}=await supa.auth.signInWithOtp({email, options:{emailRedirectTo: redirectUrl}});
   btn.textContent='Enviar enlace de acceso';btn.disabled=false;
   if(error){msg.className='login-msg error';msg.textContent='Error: '+error.message;}
   else{msg.className='login-msg success';msg.textContent='✓ Enlace enviado a '+email+'\n\nRevisa tu bandeja de entrada y haz clic en el enlace para entrar.';}
@@ -529,13 +538,43 @@ async function initApp(user){
 
 // Auth state listener
 supa.auth.onAuthStateChange(async(event,session)=>{
-  if(session?.user){
+  if(event==='SIGNED_IN' && session?.user){
+    // Limpiar el hash de la URL para que no se reprocese
+    if(location.hash.includes('access_token')){
+      history.replaceState(null,'',location.pathname);
+    }
     await initApp(session.user);
-  } else {
+  } else if(event==='SIGNED_OUT'){
     showLoading(false);
     showLogin(true);
   }
 });
+
+// Verificación inicial de sesión
+async function checkInitialSession(){
+  try {
+    // Si hay un token en el hash, esperar a que Supabase lo procese
+    if(location.hash && location.hash.includes('access_token')){
+      // Esperar a que el evento SIGNED_IN se dispare
+      await new Promise(r=>setTimeout(r, 800));
+    }
+    const {data:{session}} = await supa.auth.getSession();
+    if(session?.user){
+      if(location.hash.includes('access_token')){
+        history.replaceState(null,'',location.pathname);
+      }
+      await initApp(session.user);
+    } else {
+      showLoading(false);
+      showLogin(true);
+    }
+  } catch(e){
+    console.error('Auth error',e);
+    showLoading(false);
+    showLogin(true);
+  }
+}
+checkInitialSession();
 
 // ── Helpers ───────────────────────────────────────────────────────
 function nextMeses(desde,n){const[nom,yr]=desde.split(' ');let i=MESES.indexOf(nom),y=parseInt(yr),r=[];for(let k=1;k<n;k++){i++;if(i>11){i=0;y++;}r.push(`${MESES[i]} ${y}`);}return r;}
