@@ -536,45 +536,69 @@ async function initApp(user){
   render();
 }
 
-// Auth state listener
+// Auth state listener (solo para sign out y eventos posteriores)
 supa.auth.onAuthStateChange(async(event,session)=>{
-  if(event==='SIGNED_IN' && session?.user){
-    // Limpiar el hash de la URL para que no se reprocese
-    if(location.hash.includes('access_token')){
-      history.replaceState(null,'',location.pathname);
-    }
-    await initApp(session.user);
-  } else if(event==='SIGNED_OUT'){
+  if(event==='SIGNED_OUT'){
     showLoading(false);
     showLogin(true);
   }
 });
 
-// Verificación inicial de sesión
-async function checkInitialSession(){
+// Bootstrap robusto con polling y debug visible
+async function bootstrap(){
+  const loadingTxt = document.getElementById('loading-screen').querySelector('.loading-txt');
+  const debug = (msg) => { loadingTxt.textContent = msg; console.log('[AUTH]', msg); };
+
   try {
-    // Si hay un token en el hash, esperar a que Supabase lo procese
-    if(location.hash && location.hash.includes('access_token')){
-      // Esperar a que el evento SIGNED_IN se dispare
-      await new Promise(r=>setTimeout(r, 800));
+    const hasAuthHash = location.hash && location.hash.includes('access_token');
+    const hasError = location.hash && location.hash.includes('error');
+
+    if(hasError){
+      debug('Error en el enlace: ' + decodeURIComponent(location.hash));
+      await new Promise(r=>setTimeout(r, 3000));
+      showLoading(false);
+      showLogin(true);
+      return;
     }
+
+    if(hasAuthHash){
+      debug('Iniciando sesión desde el enlace...');
+      // Polling: esperar hasta 8 segundos para que Supabase procese el hash
+      for(let i=0; i<40; i++){
+        const {data:{session}} = await supa.auth.getSession();
+        if(session?.user){
+          debug('✓ Sesión iniciada');
+          history.replaceState(null,'',location.pathname);
+          await initApp(session.user);
+          return;
+        }
+        await new Promise(r=>setTimeout(r, 200));
+      }
+      debug('No se pudo iniciar sesión. Reintenta.');
+      await new Promise(r=>setTimeout(r, 2500));
+      showLoading(false);
+      showLogin(true);
+      return;
+    }
+
+    // Sin auth callback: revisar sesión existente
+    debug('Verificando sesión...');
     const {data:{session}} = await supa.auth.getSession();
     if(session?.user){
-      if(location.hash.includes('access_token')){
-        history.replaceState(null,'',location.pathname);
-      }
       await initApp(session.user);
     } else {
       showLoading(false);
       showLogin(true);
     }
   } catch(e){
-    console.error('Auth error',e);
+    console.error('Bootstrap error', e);
+    debug('Error: ' + e.message);
+    await new Promise(r=>setTimeout(r, 3000));
     showLoading(false);
     showLogin(true);
   }
 }
-checkInitialSession();
+bootstrap();
 
 // ── Helpers ───────────────────────────────────────────────────────
 function nextMeses(desde,n){const[nom,yr]=desde.split(' ');let i=MESES.indexOf(nom),y=parseInt(yr),r=[];for(let k=1;k<n;k++){i++;if(i>11){i=0;y++;}r.push(`${MESES[i]} ${y}`);}return r;}
@@ -878,9 +902,15 @@ function openModal(id){document.getElementById(id).classList.add('open');}
 function closeModal(id){document.getElementById(id).classList.remove('open');}
 document.querySelectorAll('.modal-bg').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('open');}));
 
-// Service Worker
+// Service Worker - skip if processing auth callback
 if('serviceWorker' in navigator){
-  window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js'));
+  const isAuthCallback = location.hash && location.hash.includes('access_token');
+  if(isAuthCallback){
+    // Desregistrar SWs viejos durante callback de auth
+    navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister()));
+  } else {
+    window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js'));
+  }
 }
 </script>
 </body>
