@@ -534,6 +534,8 @@ async function doLogin(){
 
 async function logout(){
   if(!confirm('¿Cerrar sesión?'))return;
+  appInitialized = false;
+  currentUser = null;
   await supa.auth.signOut();
   showLogin(true);
 }
@@ -602,6 +604,10 @@ function autoPopular(){
 }
 
 async function initApp(user){
+  if(appInitialized && currentUser?.id === user.id){
+    console.log('[INIT] Ya inicializada, ignorar');
+    return;
+  }
   const loadingTxt = document.getElementById('loading-screen').querySelector('.loading-txt');
   try {
     currentUser=user;
@@ -611,7 +617,6 @@ async function initApp(user){
 
     const saved=await loadFromSupabase(user.id);
     if(saved){
-      // Merge saved con defaults para garantizar todos los campos
       state = {
         historialSueldos: saved.historialSueldos || (saved.sueldoBase ? [{desde:'Enero 2026', monto:saved.sueldoBase}] : DATA_DEFAULT.historialSueldos),
         categorias: Array.isArray(saved.categorias) ? saved.categorias : DATA_DEFAULT.categorias,
@@ -623,6 +628,8 @@ async function initApp(user){
     document.getElementById('config-email').textContent=user.email;
     showLoading(false);
     render();
+    appInitialized = true;
+    console.log('[INIT] Aplicación inicializada correctamente');
   } catch(e){
     console.error('initApp error', e);
     loadingTxt.textContent='Error al cargar: '+e.message+'\nReintenta en unos segundos.';
@@ -630,26 +637,46 @@ async function initApp(user){
   }
 }
 
-// Auth state listener (solo para sign out y eventos posteriores)
-supa.auth.onAuthStateChange(async(event,session)=>{
-  if(event==='SIGNED_OUT'){
+// Track de sesión para evitar bucles
+let appInitialized = false;
+
+// Auth state listener
+supa.auth.onAuthStateChange((event, session)=>{
+  console.log('[AUTH EVENT]', event, session?.user?.email);
+  // SIGNED_OUT: solo si fue intencional (logout manual), volver al login
+  if(event==='SIGNED_OUT' && appInitialized){
+    appInitialized = false;
+    currentUser = null;
     showLoading(false);
     showLogin(true);
+    return;
+  }
+  // SIGNED_IN o TOKEN_REFRESHED con sesión válida: si la app no está inicializada, inicializar
+  if((event==='SIGNED_IN' || event==='TOKEN_REFRESHED') && session?.user && !appInitialized){
+    initApp(session.user);
   }
 });
 
-// Bootstrap simple: solo verificar sesión
+// Bootstrap: verificar sesión existente al cargar
 async function bootstrap(){
   try {
-    const {data:{session}} = await supa.auth.getSession();
+    const {data:{session}, error} = await supa.auth.getSession();
+    if(error){
+      console.error('[BOOTSTRAP] getSession error', error);
+      showLoading(false);
+      showLogin(true);
+      return;
+    }
     if(session?.user){
+      console.log('[BOOTSTRAP] Sesión encontrada para', session.user.email);
       await initApp(session.user);
     } else {
+      console.log('[BOOTSTRAP] Sin sesión, mostrar login');
       showLoading(false);
       showLogin(true);
     }
   } catch(e){
-    console.error('Bootstrap error', e);
+    console.error('[BOOTSTRAP] Error', e);
     showLoading(false);
     showLogin(true);
   }
@@ -958,9 +985,14 @@ function openModal(id){document.getElementById(id).classList.add('open');}
 function closeModal(id){document.getElementById(id).classList.remove('open');}
 document.querySelectorAll('.modal-bg').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('open');}));
 
-// Service Worker
+// DESACTIVAR Service Worker temporalmente: desregistrar TODOS y limpiar cachés
 if('serviceWorker' in navigator){
-  window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(e=>console.error('SW error',e)));
+  navigator.serviceWorker.getRegistrations().then(regs => {
+    regs.forEach(r => r.unregister());
+  });
+}
+if('caches' in window){
+  caches.keys().then(keys => keys.forEach(k => caches.delete(k)));
 }
 </script>
 </body>
