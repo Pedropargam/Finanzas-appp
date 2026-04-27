@@ -189,27 +189,6 @@
   <div class="loading-txt">Cargando tus datos...</div>
 </div>
 
-<!-- LOGIN -->
-<div id="login-screen">
-  <div class="login-logo">
-    <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <polyline points="6,30 14,20 22,25 30,12 36,8" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-      <circle cx="36" cy="8" r="3" fill="white"/>
-    </svg>
-  </div>
-  <div class="login-title">Mis Finanzas</div>
-  <div class="login-sub" id="login-sub">Ingresa tu email y contraseña.</div>
-  <div class="login-box">
-    <input type="email" id="login-email" placeholder="tu@email.com" inputmode="email" autocomplete="email">
-    <input type="password" id="login-password" placeholder="Contraseña" autocomplete="current-password">
-    <button class="btn primary" onclick="doLogin()" id="btn-login">Iniciar sesión</button>
-    <div class="login-msg" id="login-msg"></div>
-    <div style="text-align:center;margin-top:14px;font-size:13px;color:var(--text3)">
-      <a id="toggle-mode" onclick="toggleMode()" style="color:var(--green);cursor:pointer;text-decoration:underline">Crear una cuenta nueva</a>
-    </div>
-  </div>
-</div>
-
 <div class="app-header">
   <h1>Mis finanzas <span class="sync-dot" id="sync-dot"></span></h1>
   <p id="subtitle">Cargando...</p>
@@ -273,8 +252,6 @@
 
 <!-- CONFIG -->
 <div id="tab-config" class="screen">
-  <div class="section-title">Cuenta</div>
-  <div class="config-row"><span style="font-size:13px;color:var(--text3)" id="config-email">—</span><button onclick="logout()" style="font-size:13px;padding:6px 14px;border:1px solid rgba(163,45,45,0.3);border-radius:var(--radius);background:none;cursor:pointer;font-family:inherit;color:var(--red)">Cerrar sesión</button></div>
   <div class="section-title" style="margin-top:1.5rem">Sueldo base <span class="add-link" onclick="openAddSueldo()">+ Agregar cambio</span></div>
   <div class="info-box" style="margin-bottom:.75rem">Registra cada vez que cambia tu sueldo. La app usará el monto correcto para cada mes.</div>
   <div id="config-sueldo-list"></div>
@@ -458,121 +435,46 @@ const DATA_DEFAULT={
 
 let state=JSON.parse(JSON.stringify(DATA_DEFAULT));
 let filtro='todos',charts={},editCtx=null,editIngreso=null,editRecIdx=null;
-let saveTimer=null, currentUser=null;
+let saveTimer=null;
 
-// ── Auth ─────────────────────────────────────────────────────────
+// ── Carga simple sin autenticación ───────────────────────────────
+const FIXED_ID = '00000000-0000-0000-0000-000000000001';
 function showLoading(v){document.getElementById('loading-screen').classList.toggle('active',v);}
-function showLogin(v){document.getElementById('login-screen').classList.toggle('active',v);}
 
-let isRegisterMode = false;
-function toggleMode(){
-  isRegisterMode = !isRegisterMode;
-  document.getElementById('login-sub').textContent = isRegisterMode
-    ? 'Crea una cuenta nueva.'
-    : 'Ingresa tu email y contraseña.';
-  document.getElementById('btn-login').textContent = isRegisterMode ? 'Crear cuenta' : 'Iniciar sesión';
-  document.getElementById('toggle-mode').textContent = isRegisterMode
-    ? 'Ya tengo cuenta — iniciar sesión'
-    : 'Crear una cuenta nueva';
-  document.getElementById('login-msg').textContent = '';
-}
-
-async function doLogin(){
-  const email = document.getElementById('login-email').value.trim();
-  const pass = document.getElementById('login-password').value;
-  const msg = document.getElementById('login-msg');
-  if(!email || !pass){
-    msg.className='login-msg error';
-    msg.textContent='Completa email y contraseña.';
-    return;
-  }
-  if(pass.length < 6){
-    msg.className='login-msg error';
-    msg.textContent='La contraseña debe tener al menos 6 caracteres.';
-    return;
-  }
-  const btn = document.getElementById('btn-login');
-  const original = btn.textContent;
-  btn.textContent = isRegisterMode ? 'Creando cuenta...' : 'Iniciando sesión...';
-  btn.disabled = true;
-  msg.textContent = '';
-
-  try {
-    if(isRegisterMode){
-      const {data, error} = await supa.auth.signUp({email, password: pass});
-      if(error) throw error;
-      if(data.session?.user){
-        // Sesión activa inmediatamente
-        await initApp(data.session.user);
-      } else if(data.user){
-        // Confirmación de email pendiente
-        msg.className='login-msg success';
-        msg.textContent='✓ Cuenta creada. Si pide confirmar email, revisa tu correo. Si no, inicia sesión.';
-        isRegisterMode = false;
-        document.getElementById('login-sub').textContent='Ingresa tu email y contraseña.';
-        document.getElementById('btn-login').textContent='Iniciar sesión';
-        document.getElementById('toggle-mode').textContent='Crear una cuenta nueva';
-      }
-    } else {
-      const {data, error} = await supa.auth.signInWithPassword({email, password: pass});
-      if(error) throw error;
-      if(data.session?.user){
-        await initApp(data.session.user);
-      }
-    }
-  } catch(e){
-    msg.className='login-msg error';
-    let txt = e.message || 'Error desconocido';
-    if(txt.includes('Invalid login credentials')) txt='Email o contraseña incorrectos.';
-    else if(txt.includes('already registered')) txt='Este email ya está registrado. Inicia sesión.';
-    else if(txt.includes('Email not confirmed')) txt='Confirma tu email primero (revisa tu correo).';
-    msg.textContent = txt;
-    btn.textContent = original;
-    btn.disabled = false;
-  }
-}
-
-async function logout(){
-  if(!confirm('¿Cerrar sesión?'))return;
-  appInitialized = false;
-  currentUser = null;
-  await supa.auth.signOut();
-  showLogin(true);
-}
-
-// ── Supabase data ─────────────────────────────────────────────────
+// ── Supabase data (sin autenticación) ─────────────────────────────
 function setSyncDot(st){
   const d=document.getElementById('sync-dot');
   d.className='sync-dot'+(st==='syncing'?' syncing':st==='error'?' error':'');
 }
 
-async function loadFromSupabase(userId){
-  const {data,error}=await supa.from('finanzas_data').select('data').eq('user_id',userId).single();
-  if(error&&error.code!=='PGRST116') console.error('Load error',error);
-  return data?.data||null;
+async function loadFromSupabase(){
+  try {
+    const {data,error}=await supa.from('finanzas_data').select('data').eq('user_id',FIXED_ID).single();
+    if(error&&error.code!=='PGRST116'){ console.error('Load error',error); return null; }
+    return data?.data||null;
+  } catch(e){ console.error('Load error',e); return null; }
 }
 
 async function saveToSupabase(){
-  if(!currentUser)return;
   setSyncDot('syncing');
-  const {error}=await supa.from('finanzas_data').upsert({user_id:currentUser.id,data:state},{onConflict:'user_id'});
-  if(error){setSyncDot('error');console.error('Save error',error);}
-  else setSyncDot('ok');
+  try {
+    const {error}=await supa.from('finanzas_data').upsert({user_id:FIXED_ID,data:state},{onConflict:'user_id'});
+    if(error){setSyncDot('error');console.error('Save error',error);}
+    else setSyncDot('ok');
+  } catch(e){ setSyncDot('error'); console.error('Save error',e); }
 }
 
 function saveState(){
   clearTimeout(saveTimer);
-  saveTimer=setTimeout(saveToSupabase, 1200); // debounce 1.2s
+  saveTimer=setTimeout(saveToSupabase, 1200);
 }
 
 // ── Init ─────────────────────────────────────────────────────────
 function autoPopular(){
-  // Garantizar estructuras
   if(!state.meses || typeof state.meses !== 'object') state.meses = {};
   if(!Array.isArray(state.categorias)) state.categorias = DATA_DEFAULT.categorias.slice();
   if(!Array.isArray(state.recurrentes)) state.recurrentes = [];
 
-  // Migrar sueldoBase antiguo a historialSueldos
   if(state.sueldoBase && !state.historialSueldos){
     state.historialSueldos=[{desde:'Enero 2026', monto:state.sueldoBase}];
     delete state.sueldoBase;
@@ -581,13 +483,11 @@ function autoPopular(){
     state.historialSueldos=[{desde:'Enero 2026', monto:2238797}];
   }
 
-  // Crear mes actual si no existe
   if(!state.meses[MES_ACTUAL]){
     state.meses[MES_ACTUAL]={cerrado:false,ingresos:[],gastos:(state.recurrentes||[]).map(r=>({...r,esRecurrente:true}))};
     saveState();
   }
 
-  // Sanitizar cada mes
   Object.keys(state.meses).forEach(m => {
     const mes = state.meses[m];
     if(!mes || typeof mes !== 'object') { state.meses[m] = {cerrado:false,ingresos:[],gastos:[]}; return; }
@@ -603,19 +503,12 @@ function autoPopular(){
   state.meses=ordenados;
 }
 
-async function initApp(user){
-  if(appInitialized && currentUser?.id === user.id){
-    console.log('[INIT] Ya inicializada, ignorar');
-    return;
-  }
+async function initApp(){
   const loadingTxt = document.getElementById('loading-screen').querySelector('.loading-txt');
   try {
-    currentUser=user;
     showLoading(true);
-    showLogin(false);
     loadingTxt.textContent='Cargando tus datos...';
-
-    const saved=await loadFromSupabase(user.id);
+    const saved=await loadFromSupabase();
     if(saved){
       state = {
         historialSueldos: saved.historialSueldos || (saved.sueldoBase ? [{desde:'Enero 2026', monto:saved.sueldoBase}] : DATA_DEFAULT.historialSueldos),
@@ -623,66 +516,21 @@ async function initApp(user){
         recurrentes: Array.isArray(saved.recurrentes) ? saved.recurrentes : DATA_DEFAULT.recurrentes,
         meses: (saved.meses && typeof saved.meses === 'object') ? saved.meses : DATA_DEFAULT.meses
       };
+    } else {
+      // Primera vez: usar datos por defecto y guardarlos
+      state = JSON.parse(JSON.stringify(DATA_DEFAULT));
+      saveState();
     }
     autoPopular();
-    document.getElementById('config-email').textContent=user.email;
     showLoading(false);
     render();
-    appInitialized = true;
-    console.log('[INIT] Aplicación inicializada correctamente');
   } catch(e){
     console.error('initApp error', e);
-    loadingTxt.textContent='Error al cargar: '+e.message+'\nReintenta en unos segundos.';
-    setTimeout(()=>{showLoading(false);showLogin(true);}, 4000);
+    loadingTxt.textContent='Error al cargar: '+e.message;
   }
 }
 
-// Track de sesión para evitar bucles
-let appInitialized = false;
-
-// Auth state listener
-supa.auth.onAuthStateChange((event, session)=>{
-  console.log('[AUTH EVENT]', event, session?.user?.email);
-  // SIGNED_OUT: solo si fue intencional (logout manual), volver al login
-  if(event==='SIGNED_OUT' && appInitialized){
-    appInitialized = false;
-    currentUser = null;
-    showLoading(false);
-    showLogin(true);
-    return;
-  }
-  // SIGNED_IN o TOKEN_REFRESHED con sesión válida: si la app no está inicializada, inicializar
-  if((event==='SIGNED_IN' || event==='TOKEN_REFRESHED') && session?.user && !appInitialized){
-    initApp(session.user);
-  }
-});
-
-// Bootstrap: verificar sesión existente al cargar
-async function bootstrap(){
-  try {
-    const {data:{session}, error} = await supa.auth.getSession();
-    if(error){
-      console.error('[BOOTSTRAP] getSession error', error);
-      showLoading(false);
-      showLogin(true);
-      return;
-    }
-    if(session?.user){
-      console.log('[BOOTSTRAP] Sesión encontrada para', session.user.email);
-      await initApp(session.user);
-    } else {
-      console.log('[BOOTSTRAP] Sin sesión, mostrar login');
-      showLoading(false);
-      showLogin(true);
-    }
-  } catch(e){
-    console.error('[BOOTSTRAP] Error', e);
-    showLoading(false);
-    showLogin(true);
-  }
-}
-bootstrap();
-
+initApp();
 // ── Helpers ───────────────────────────────────────────────────────
 function nextMeses(desde,n){const[nom,yr]=desde.split(' ');let i=MESES.indexOf(nom),y=parseInt(yr),r=[];for(let k=1;k<n;k++){i++;if(i>11){i=0;y++;}r.push(`${MESES[i]} ${y}`);}return r;}
 function diasEnMes(mk){const[nom,yr]=mk.split(' ');return new Date(parseInt(yr),MESES.indexOf(nom)+1,0).getDate();}
@@ -787,7 +635,6 @@ function renderAnual(){
 
 function renderConfig(){
   document.getElementById('config-sueldo').textContent=fmt(getSueldo(MES_ACTUAL));
-  if(currentUser)document.getElementById('config-email').textContent=currentUser.email;
   renderHistorialSueldos();
   document.getElementById('cats-pills').innerHTML=state.categorias.map((c,i)=>`<span class="cat-pill">${c}<span class="del" onclick="delCat(${i})">✕</span></span>`).join('');
   const rec=state.recurrentes||[];
