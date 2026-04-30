@@ -209,11 +209,11 @@
     <div class="card"><label>Total gastado</label><div class="val" id="card-gastado">—</div></div>
     <div class="card full"><label>Saldo disponible proyectado</label><div class="val" id="card-saldo">—</div></div>
   </div>
+  <button class="btn primary" onclick="openGasto(null,null)" style="margin-top:0;margin-bottom:8px">+ Agregar gasto</button>
   <div class="vel-card" id="vel-card"></div>
   <div class="section-title">Gastos de <span id="mes-label">este mes</span></div>
   <div id="gastos-list"></div>
-  <button class="btn primary" onclick="openGasto(null,null)">+ Agregar gasto</button>
-  <button class="btn" onclick="openCerrarMes()" style="margin-top:6px">Cerrar mes y confirmar ingreso</button>
+  <button class="btn" onclick="openCerrarMes()" style="margin-top:8px">Cerrar mes y confirmar ingreso</button>
 </div>
 
 <!-- HISTORIAL -->
@@ -634,7 +634,6 @@ function renderAnual(){
 }
 
 function renderConfig(){
-  document.getElementById('config-sueldo').textContent=fmt(getSueldo(MES_ACTUAL));
   renderHistorialSueldos();
   document.getElementById('cats-pills').innerHTML=state.categorias.map((c,i)=>`<span class="cat-pill">${c}<span class="del" onclick="delCat(${i})">✕</span></span>`).join('');
   const rec=state.recurrentes||[];
