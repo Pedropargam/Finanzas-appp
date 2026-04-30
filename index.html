@@ -680,10 +680,12 @@ function updateCuotaPreview(){
 
 function openGasto(mes,idx){
   editCtx={mes:mes||MES_ACTUAL,idx};
-  document.getElementById('inp-cat').innerHTML=state.categorias.map(c=>`<option>${c}</option>`).join('');
+  // Opción vacía como placeholder + categorías
+  document.getElementById('inp-cat').innerHTML='<option value="" disabled selected>Seleccionar categoría...</option>'+state.categorias.map(c=>`<option>${c}</option>`).join('');
   const ed=idx!==null&&idx!==undefined;
   document.getElementById('mg-title').textContent=ed?'Editar gasto':'Agregar gasto';
   document.getElementById('inp-cuotas').value='1';document.getElementById('cuota-preview').style.display='none';
+  document.getElementById('inp-tipo').value='variable'; // por defecto variable
   const db=document.getElementById('btn-del-g');
   if(ed){const g=state.meses[editCtx.mes].gastos[idx];document.getElementById('inp-nota').value=g.nota;document.getElementById('inp-cat').value=g.cat;document.getElementById('inp-monto').value=g.monto;document.getElementById('inp-tipo').value=g.tipo;db.style.display='block';}
   else{document.getElementById('inp-nota').value='';document.getElementById('inp-monto').value='';db.style.display='none';}
@@ -694,6 +696,7 @@ function saveGasto(){
     mt=parseFloat(document.getElementById('inp-monto').value)||0,tipo=document.getElementById('inp-tipo').value,
     nc=parseInt(document.getElementById('inp-cuotas').value)||1;
   if(!nota||!mt){alert('Completa todos los campos');return;}
+  if(!cat){alert('Selecciona una categoría');return;}
   const m=editCtx.mes;if(!state.meses[m])state.meses[m]={cerrado:false,ingresos:[],gastos:[]};
   const cm=Math.round(mt/nc);
   if(editCtx.idx!==null&&editCtx.idx!==undefined){state.meses[m].gastos[editCtx.idx]={...state.meses[m].gastos[editCtx.idx],nota,cat,monto:cm,tipo};}
