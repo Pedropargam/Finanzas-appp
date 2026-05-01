@@ -591,7 +591,14 @@ function renderMes(){
 }
 
 function renderHistorial(){
-  const list=document.getElementById('historial-list');if(!list)return;
+  const tab=document.getElementById('tab-historial');
+  if(!tab)return;
+  // Restaurar estructura si fue reemplazada por showDetalle
+  let list=document.getElementById('historial-list');
+  if(!list){
+    tab.innerHTML='<div id="historial-list"></div>';
+    list=document.getElementById('historial-list');
+  }
   list.innerHTML='';
   // Solo meses hasta el mes actual
   Object.keys(state.meses).filter(m=>mesIdx(m)<=mesIdx(MES_ACTUAL)).reverse().forEach(m=>{
@@ -606,6 +613,12 @@ function showDetalle(m){
   const mes=state.meses[m],g=tG(m),ing=mes.cerrado?tI(m):getSueldo(m),ah=ing-g;
   const bonoRow=mes.cerrado&&tBono(m)>0?`<div class="preview-row preview-bono"><span>Bono incluido</span><span>${fmt(tBono(m))}</span></div>`:'';
   const gHTML=[...mes.gastos].map((_,i)=>i).reverse().map(i=>gastoHTML(mes.gastos[i],m,i)).join('');
+  // Sección ingreso: siempre visible con botón editar
+  const tituloIngreso = mes.cerrado ? 'Ingreso recibido' : 'Ingreso (proyectado)';
+  const labelBoton = mes.cerrado ? 'Editar' : 'Registrar';
+  const bloqueIngreso = mes.cerrado
+    ? `<div class="preview-box"><div class="preview-row"><span>Sueldo base</span><span>${fmt(tBase(m))}</span></div>${bonoRow}<div class="preview-row preview-total"><span>Total</span><span>${fmt(ing)}</span></div></div>`
+    : `<div class="preview-box" style="font-size:13px;color:var(--text3)">Aún no registras el ingreso real de este mes. Toca "Registrar" para ingresarlo.</div>`;
   document.getElementById('tab-historial').innerHTML=`
     <button class="back-btn" onclick="renderHistorial()">← Volver</button>
     <div style="font-size:20px;font-weight:700;margin-bottom:1rem">${m}</div>
@@ -614,8 +627,8 @@ function showDetalle(m){
       <div class="card"><label>Total gastado</label><div class="val">${fmt(g)}</div></div>
       <div class="card full"><label>Ahorro / Déficit</label><div class="val ${ah>=0?'green':'red'}">${fmt(ah)}</div></div>
     </div>
-    ${mes.cerrado?`<div class="section-title">Ingreso <button onclick="openEditIngreso('${m}')" style="font-size:12px;padding:3px 10px;border:1px solid var(--border);border-radius:var(--radius);background:none;cursor:pointer;font-family:inherit;color:var(--text3)">Editar</button></div>
-    <div class="preview-box"><div class="preview-row"><span>Sueldo base</span><span>${fmt(tBase(m))}</span></div>${bonoRow}<div class="preview-row preview-total"><span>Total</span><span>${fmt(ing)}</span></div></div>`:''}
+    <div class="section-title">${tituloIngreso} <button onclick="openEditIngreso('${m}')" style="font-size:12px;padding:3px 10px;border:1px solid var(--border);border-radius:var(--radius);background:none;cursor:pointer;font-family:inherit;color:var(--text3)">${labelBoton}</button></div>
+    ${bloqueIngreso}
     <div class="section-title">Gastos (${mes.gastos.length})</div>${gHTML}
     <button class="btn primary" onclick="openGasto('${m}',null)" style="margin-top:8px">+ Agregar gasto</button>`;
 }
@@ -713,7 +726,14 @@ function deleteGasto(){if(!confirm('¿Eliminar este gasto?'))return;state.meses[
 function confirmDel(mes,idx){if(!confirm('¿Eliminar?'))return;state.meses[mes].gastos.splice(idx,1);saveState();const enD=document.getElementById('tab-historial').querySelector('.back-btn');if(enD&&mes!==MES_ACTUAL)showDetalle(mes);else render();}
 
 function openCerrarMes(){editIngreso=null;document.getElementById('mc-title').textContent='Cerrar mes';document.getElementById('inp-dep').value='';document.getElementById('dep-preview').style.display='none';openModal('modal-cerrar');}
-function openEditIngreso(m){editIngreso=m;document.getElementById('mc-title').textContent='Editar ingreso';document.getElementById('inp-dep').value=tI(m);updateDepPreview();openModal('modal-cerrar');}
+function openEditIngreso(m){
+  editIngreso=m;
+  const yaCerrado=state.meses[m]?.cerrado;
+  document.getElementById('mc-title').textContent=yaCerrado?'Editar ingreso':'Registrar ingreso de '+m;
+  document.getElementById('inp-dep').value=yaCerrado?tI(m):'';
+  updateDepPreview();
+  openModal('modal-cerrar');
+}
 function updateDepPreview(){
   const t=parseFloat(document.getElementById('inp-dep').value)||0,box=document.getElementById('dep-preview');
   if(!t){box.style.display='none';return;}box.style.display='block';
