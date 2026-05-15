@@ -448,19 +448,27 @@ function setSyncDot(st){
 }
 
 async function loadFromSupabase(){
-  try {
-    const {data,error}=await supa.from('finanzas_data').select('data').eq('user_id',FIXED_ID).single();
-    if(error&&error.code!=='PGRST116'){ console.error('Load error',error); return null; }
-    return data?.data||null;
-  } catch(e){ console.error('Load error',e); return null; }
+  // maybeSingle() distingue entre "no hay fila" y "hubo error"
+  const {data, error} = await supa.from('finanzas_data').select('data').eq('user_id', FIXED_ID).maybeSingle();
+  if(error) throw error;
+  return data?.data || null;
+}
+
+// Verifica si existe una fila para este usuario, sin importar si la podemos leer
+async function rowExists(){
+  const {count, error} = await supa.from('finanzas_data').select('user_id',{count:'exact',head:true}).eq('user_id', FIXED_ID);
+  if(error) throw error;
+  return (count||0) > 0;
 }
 
 async function saveToSupabase(){
   setSyncDot('syncing');
   try {
     const {error}=await supa.from('finanzas_data').upsert({user_id:FIXED_ID,data:state},{onConflict:'user_id'});
-    if(error){setSyncDot('error');console.error('Save error',error);}
-    else setSyncDot('ok');
+    if(error){setSyncDot('error');console.error('Save error',error);return;}
+    setSyncDot('ok');
+    // Respaldo local de seguridad
+    try { localStorage.setItem('finanzas_backup', JSON.stringify({state, ts: Date.now()})); } catch(e){}
   } catch(e){ setSyncDot('error'); console.error('Save error',e); }
 }
 
@@ -468,6 +476,18 @@ function saveState(){
   clearTimeout(saveTimer);
   saveTimer=setTimeout(saveToSupabase, 1200);
 }
+
+// Guardar inmediatamente si el usuario sale o cambia de pestaña (antes de que termine el debounce)
+function flushSave(){
+  if(saveTimer){
+    clearTimeout(saveTimer);
+    saveTimer=null;
+    saveToSupabase();
+  }
+}
+window.addEventListener('beforeunload', flushSave);
+window.addEventListener('pagehide', flushSave);
+document.addEventListener('visibilitychange', () => { if(document.visibilityState==='hidden') flushSave(); });
 
 // ── Init ─────────────────────────────────────────────────────────
 function autoPopular(){
@@ -505,29 +525,71 @@ function autoPopular(){
 
 async function initApp(){
   const loadingTxt = document.getElementById('loading-screen').querySelector('.loading-txt');
-  try {
-    showLoading(true);
-    loadingTxt.textContent='Cargando tus datos...';
-    const saved=await loadFromSupabase();
-    if(saved){
-      state = {
-        historialSueldos: saved.historialSueldos || (saved.sueldoBase ? [{desde:'Enero 2026', monto:saved.sueldoBase}] : DATA_DEFAULT.historialSueldos),
-        categorias: Array.isArray(saved.categorias) ? saved.categorias : DATA_DEFAULT.categorias,
-        recurrentes: Array.isArray(saved.recurrentes) ? saved.recurrentes : DATA_DEFAULT.recurrentes,
-        meses: (saved.meses && typeof saved.meses === 'object') ? saved.meses : DATA_DEFAULT.meses
-      };
-    } else {
-      // Primera vez: usar datos por defecto y guardarlos
-      state = JSON.parse(JSON.stringify(DATA_DEFAULT));
-      saveState();
+  showLoading(true);
+  loadingTxt.innerHTML='Cargando tus datos...';
+
+  let saved = null;
+  let loadError = null;
+
+  // Intentar cargar hasta 3 veces antes de rendirse
+  for(let i=0; i<3; i++){
+    try {
+      saved = await loadFromSupabase();
+      loadError = null;
+      break;
+    } catch(e){
+      loadError = e;
+      console.error('Load attempt '+(i+1)+' failed:', e);
+      if(i<2) await new Promise(r=>setTimeout(r, 1500));
     }
-    autoPopular();
-    showLoading(false);
-    render();
-  } catch(e){
-    console.error('initApp error', e);
-    loadingTxt.textContent='Error al cargar: '+e.message;
   }
+
+  // Si hubo error de carga, NUNCA sobrescribir. Mostrar error y dejar reintentar.
+  if(loadError){
+    loadingTxt.innerHTML = '⚠️ No se pudieron cargar tus datos.<br><br>Revisa tu conexión y reintenta.<br><br><button class="btn primary" style="margin-top:1rem" onclick="initApp()">Reintentar</button>';
+    return;
+  }
+
+  if(saved){
+    // Tenemos datos: usarlos completos
+    state = {
+      historialSueldos: saved.historialSueldos || (saved.sueldoBase ? [{desde:'Enero 2026', monto:saved.sueldoBase}] : DATA_DEFAULT.historialSueldos),
+      categorias: Array.isArray(saved.categorias) ? saved.categorias : DATA_DEFAULT.categorias,
+      recurrentes: Array.isArray(saved.recurrentes) ? saved.recurrentes : DATA_DEFAULT.recurrentes,
+      meses: (saved.meses && typeof saved.meses === 'object') ? saved.meses : DATA_DEFAULT.meses
+    };
+  } else {
+    // No hay datos. Doble verificación antes de inicializar con defaults.
+    try {
+      const exists = await rowExists();
+      if(exists){
+        // Existe la fila pero data viene null/vacía: NO sobrescribir, mostrar error
+        loadingTxt.innerHTML = '⚠️ Tus datos parecen estar vacíos.<br><br>Si esto es un error, contacta soporte antes de continuar.<br><br><button class="btn" style="margin-top:1rem" onclick="initApp()">Reintentar</button><br><button class="btn primary" style="margin-top:1rem" onclick="startFresh()">Empezar de cero</button>';
+        return;
+      }
+    } catch(e){
+      // Si tampoco podemos verificar, no continuar
+      loadingTxt.innerHTML = '⚠️ Error de conexión.<br><br><button class="btn primary" style="margin-top:1rem" onclick="initApp()">Reintentar</button>';
+      return;
+    }
+    // Primera vez de verdad: usar defaults y guardar
+    state = JSON.parse(JSON.stringify(DATA_DEFAULT));
+    await saveToSupabase(); // guardar de inmediato, sin debounce
+  }
+
+  autoPopular();
+  showLoading(false);
+  render();
+}
+
+// Inicializar con defaults (solo cuando usuario confirma)
+async function startFresh(){
+  if(!confirm('¿Empezar de cero con los datos por defecto? Esto reemplazará cualquier dato existente.'))return;
+  state = JSON.parse(JSON.stringify(DATA_DEFAULT));
+  await saveToSupabase();
+  autoPopular();
+  showLoading(false);
+  render();
 }
 
 initApp();
@@ -545,6 +607,7 @@ function getSueldo(mes){
 function mesIdx(mk){const[n,y]=mk.split(' ');return parseInt(y)*12+MESES.indexOf(n);}
 
 const fmt=n=>'$'+Math.round(n).toLocaleString('es-CL');
+const esc=s=>String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtEje=v=>{const a=Math.abs(v),s=v<0?'-':'';return a>=1e6?s+'$'+(a/1e6).toFixed(1)+'M':a>=1e3?s+'$'+(a/1e3).toFixed(0)+'K':s+'$'+a;};
 const tG=m=>(state.meses[m]?.gastos||[]).reduce((a,g)=>a+g.monto,0);
 const tI=m=>(state.meses[m]?.ingresos||[]).reduce((a,i)=>a+i.monto,0);
@@ -560,7 +623,7 @@ function render(){
 
 function gastoHTML(g,mes,idx){
   const b=[g.esRecurrente?'<span class="badge rec">recurrente</span>':'',g.esCuota?`<span class="badge cuota">cuota ${g.cuotaNum}/${g.cuotaTotal}</span>`:''].join('');
-  return `<div class="item-row"><div class="item-info"><div class="nota">${g.nota}${b}</div><div class="cat">${g.cat} · ${g.tipo}</div></div><div class="item-monto">${fmt(g.monto)}</div><button class="icon-btn" onclick="openGasto('${mes}',${idx})">✎</button><button class="icon-btn del" onclick="confirmDel('${mes}',${idx})">✕</button></div>`;
+  return `<div class="item-row"><div class="item-info"><div class="nota">${esc(g.nota)}${b}</div><div class="cat">${esc(g.cat)} · ${esc(g.tipo)}</div></div><div class="item-monto">${fmt(g.monto)}</div><button class="icon-btn" onclick="openGasto('${esc(mes)}',${idx})">✎</button><button class="icon-btn del" onclick="confirmDel('${esc(mes)}',${idx})">✕</button></div>`;
 }
 
 function renderVel(){
@@ -648,9 +711,9 @@ function renderAnual(){
 
 function renderConfig(){
   renderHistorialSueldos();
-  document.getElementById('cats-pills').innerHTML=state.categorias.map((c,i)=>`<span class="cat-pill">${c}<span class="del" onclick="delCat(${i})">✕</span></span>`).join('');
+  document.getElementById('cats-pills').innerHTML=state.categorias.map((c,i)=>`<span class="cat-pill">${esc(c)}<span class="del" onclick="delCat(${i})">✕</span></span>`).join('');
   const rec=state.recurrentes||[];
-  document.getElementById('rec-list').innerHTML=rec.length?rec.map((r,i)=>`<div class="item-row"><div class="item-info"><div class="nota">${r.nota}</div><div class="cat">${r.cat} · ${r.tipo} · ${fmt(r.monto)}</div></div><button class="icon-btn" onclick="openRecurrente(${i})">✎</button><button class="icon-btn del" onclick="delRecDir(${i})">✕</button></div>`).join(''):'<p style="font-size:14px;color:var(--text3);padding:8px 0">Sin gastos recurrentes aún.</p>';
+  document.getElementById('rec-list').innerHTML=rec.length?rec.map((r,i)=>`<div class="item-row"><div class="item-info"><div class="nota">${esc(r.nota)}</div><div class="cat">${esc(r.cat)} · ${esc(r.tipo)} · ${fmt(r.monto)}</div></div><button class="icon-btn" onclick="openRecurrente(${i})">✎</button><button class="icon-btn del" onclick="delRecDir(${i})">✕</button></div>`).join(''):'<p style="font-size:14px;color:var(--text3);padding:8px 0">Sin gastos recurrentes aún.</p>';
 }
 
 function renderGraficos(){
@@ -664,7 +727,7 @@ function renderGraficos(){
   });
   const cT={};mf.forEach(m=>(state.meses[m]?.gastos||[]).forEach(g=>{cT[g.cat]=(cT[g.cat]||0)+g.monto;}));
   const cL=Object.keys(cT).sort((a,b)=>cT[b]-cT[a]),cV=cL.map(c=>cT[c]),mx=cV[0]||1;
-  document.getElementById('hbar-wrap').innerHTML=cL.map((c,i)=>`<div style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;font-size:13px;color:var(--text3);margin-bottom:5px"><span>${c}</span><span style="font-weight:600;color:var(--text)">${fmt(cV[i])}</span></div><div style="height:10px;background:var(--bg2);border-radius:5px;overflow:hidden"><div style="height:100%;width:${Math.round(cV[i]/mx*100)}%;background:${COLORS[i%COLORS.length]};border-radius:5px"></div></div></div>`).join('');
+  document.getElementById('hbar-wrap').innerHTML=cL.map((c,i)=>`<div style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;font-size:13px;color:var(--text3);margin-bottom:5px"><span>${esc(c)}</span><span style="font-weight:600;color:var(--text)">${fmt(cV[i])}</span></div><div style="height:10px;background:var(--bg2);border-radius:5px;overflow:hidden"><div style="height:100%;width:${Math.round(cV[i]/mx*100)}%;background:${COLORS[i%COLORS.length]};border-radius:5px"></div></div></div>`).join('');
   const lM=mf.map(m=>m.split(' ')[0]),iM=mf.map(m=>state.meses[m].cerrado?tI(m):0),gM=mf.map(m=>tG(m));
   if(charts.m)charts.m.destroy();
   charts.m=new Chart(document.getElementById('chart-mensual'),{type:'bar',data:{labels:lM,datasets:[{label:'Ingreso',data:iM,backgroundColor:'#1D9E75',borderRadius:4},{label:'Gasto',data:gM,backgroundColor:'#D85A30',borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${fmt(ctx.raw)}`}}},scales:{x:{ticks:{autoSkip:false,color:'#888780'},grid:{display:false}},y:{ticks:{callback:fmtEje,color:'#888780'},grid:{color:'rgba(0,0,0,0.05)'}}}}});
@@ -694,7 +757,7 @@ function updateCuotaPreview(){
 function openGasto(mes,idx){
   editCtx={mes:mes||MES_ACTUAL,idx};
   // Opción vacía como placeholder + categorías
-  document.getElementById('inp-cat').innerHTML='<option value="" disabled selected>Seleccionar categoría...</option>'+state.categorias.map(c=>`<option>${c}</option>`).join('');
+  document.getElementById('inp-cat').innerHTML='<option value="" disabled selected>Seleccionar categoría...</option>'+state.categorias.map(c=>`<option>${esc(c)}</option>`).join('');
   const ed=idx!==null&&idx!==undefined;
   document.getElementById('mg-title').textContent=ed?'Editar gasto':'Agregar gasto';
   document.getElementById('inp-cuotas').value='1';document.getElementById('cuota-preview').style.display='none';
@@ -722,8 +785,22 @@ function saveGasto(){
   const enD=document.getElementById('tab-historial').querySelector('.back-btn');
   if(enD&&m!==MES_ACTUAL)showDetalle(m);else render();
 }
-function deleteGasto(){if(!confirm('¿Eliminar este gasto?'))return;state.meses[editCtx.mes].gastos.splice(editCtx.idx,1);saveState();closeModal('modal-gasto');const enD=document.getElementById('tab-historial').querySelector('.back-btn');if(enD&&editCtx.mes!==MES_ACTUAL)showDetalle(editCtx.mes);else render();}
-function confirmDel(mes,idx){if(!confirm('¿Eliminar?'))return;state.meses[mes].gastos.splice(idx,1);saveState();const enD=document.getElementById('tab-historial').querySelector('.back-btn');if(enD&&mes!==MES_ACTUAL)showDetalle(mes);else render();}
+function deleteGasto(){
+  if(!confirm('¿Eliminar este gasto?'))return;
+  if(!editCtx || !state.meses[editCtx.mes] || !Array.isArray(state.meses[editCtx.mes].gastos)){closeModal('modal-gasto');return;}
+  state.meses[editCtx.mes].gastos.splice(editCtx.idx,1);
+  saveState();closeModal('modal-gasto');
+  const enD=document.getElementById('tab-historial').querySelector('.back-btn');
+  if(enD&&editCtx.mes!==MES_ACTUAL)showDetalle(editCtx.mes);else render();
+}
+function confirmDel(mes,idx){
+  if(!confirm('¿Eliminar?'))return;
+  if(!state.meses[mes] || !Array.isArray(state.meses[mes].gastos))return;
+  state.meses[mes].gastos.splice(idx,1);
+  saveState();
+  const enD=document.getElementById('tab-historial').querySelector('.back-btn');
+  if(enD&&mes!==MES_ACTUAL)showDetalle(mes);else render();
+}
 
 function openCerrarMes(){editIngreso=null;document.getElementById('mc-title').textContent='Cerrar mes';document.getElementById('inp-dep').value='';document.getElementById('dep-preview').style.display='none';openModal('modal-cerrar');}
 function openEditIngreso(m){
@@ -839,14 +916,36 @@ function openAddCat(){document.getElementById('inp-cat-n').value='';openModal('m
 function saveCat(){const n=document.getElementById('inp-cat-n').value.trim();if(!n){alert('Escribe un nombre');return;}if(state.categorias.includes(n)){alert('Ya existe');return;}state.categorias.push(n);saveState();renderConfig();closeModal('modal-cat');}
 function delCat(i){if(!confirm(`¿Eliminar "${state.categorias[i]}"?`))return;state.categorias.splice(i,1);saveState();renderConfig();}
 function openRecurrente(idx){
-  editRecIdx=idx;document.getElementById('inp-rc').innerHTML=state.categorias.map(c=>`<option>${c}</option>`).join('');
+  editRecIdx=idx;document.getElementById('inp-rc').innerHTML=state.categorias.map(c=>`<option>${esc(c)}</option>`).join('');
   const ed=idx!==null&&idx!==undefined,db=document.getElementById('btn-del-r');
   document.getElementById('mr-title').textContent=ed?'Editar recurrente':'Nuevo recurrente';
   if(ed){const r=state.recurrentes[idx];document.getElementById('inp-rn').value=r.nota;document.getElementById('inp-rc').value=r.cat;document.getElementById('inp-rm').value=r.monto;document.getElementById('inp-rt').value=r.tipo;db.style.display='block';}
   else{document.getElementById('inp-rn').value='';document.getElementById('inp-rm').value='';db.style.display='none';}
   openModal('modal-rec');
 }
-function saveRec(){const n=document.getElementById('inp-rn').value.trim(),c=document.getElementById('inp-rc').value,m=parseFloat(document.getElementById('inp-rm').value)||0,t=document.getElementById('inp-rt').value;if(!n||!m){alert('Completa todos los campos');return;}if(!state.recurrentes)state.recurrentes=[];const r={nota:n,cat:c,monto:m,tipo:t,esRecurrente:true};if(editRecIdx!==null&&editRecIdx!==undefined)state.recurrentes[editRecIdx]=r;else state.recurrentes.push(r);saveState();renderConfig();closeModal('modal-rec');}
+function saveRec(){
+  const n=document.getElementById('inp-rn').value.trim(),
+    c=document.getElementById('inp-rc').value,
+    m=parseFloat(document.getElementById('inp-rm').value)||0,
+    t=document.getElementById('inp-rt').value;
+  if(!n||!m){alert('Completa todos los campos');return;}
+  if(!state.recurrentes)state.recurrentes=[];
+  const r={nota:n,cat:c,monto:m,tipo:t,esRecurrente:true};
+  const esNuevo = editRecIdx===null || editRecIdx===undefined;
+  if(esNuevo) state.recurrentes.push(r);
+  else state.recurrentes[editRecIdx]=r;
+  // Si es nuevo, agregarlo también a meses futuros abiertos ya creados (para no perderlo en cuotas pre-creadas)
+  if(esNuevo){
+    Object.keys(state.meses).forEach(mk=>{
+      const mes=state.meses[mk];
+      if(mesIdx(mk)>mesIdx(MES_ACTUAL) && !mes.cerrado){
+        if(!Array.isArray(mes.gastos)) mes.gastos=[];
+        mes.gastos.push({...r});
+      }
+    });
+  }
+  saveState();renderConfig();closeModal('modal-rec');
+}
 function deleteRec(){if(!confirm('¿Eliminar?'))return;state.recurrentes.splice(editRecIdx,1);saveState();renderConfig();closeModal('modal-rec');}
 function delRecDir(i){if(!confirm('¿Eliminar?'))return;state.recurrentes.splice(i,1);saveState();renderConfig();}
 
